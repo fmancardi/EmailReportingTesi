@@ -1,26 +1,31 @@
 <?php
-	# Mantis - a php based bugtracking system
-	# Copyright (C) 2002 - 2004  Mantis Team   - mantisbt-dev@lists.sourceforge.net
-	# Copyright (C) 2004  Gerrit Beine - gerrit.beine@pitcom.de
-	# Copyright (C) 2007  Rolf Kleef - rolf@drostan.org (IMAP)
-	# This program is distributed under the terms and conditions of the GPL
-	# See the README and LICENSE files for details
+# Mantis - a php based bugtracking system
+# Copyright (C) 2002 - 2004  Mantis Team   - mantisbt-dev@lists.sourceforge.net
+# Copyright (C) 2004  Gerrit Beine - gerrit.beine@pitcom.de
+# Copyright (C) 2007  Rolf Kleef - rolf@drostan.org (IMAP)
+# This program is distributed under the terms and conditions of the GPL
+# See the README and LICENSE files for details
+# 
+# This page receives an E-Mail via POP3 or IMAP and generates an Report
+#
+# Changed to implement
+# 1. Special processing for Fusion Reactor mails
+# 2. Special processing for mails with TESI TAGS on mail body
 
-	# This page receives an E-Mail via POP3 or IMAP and generates an Report
+require_once( 'bug_api.php' );
+require_once( 'bugnote_api.php' );
+require_once( 'user_api.php' );
+require_once( 'file_api.php' );
+require_once( 'custom_field_api.php' ); // TESI
 
-	require_once( 'bug_api.php' );
-	require_once( 'bugnote_api.php' );
-	require_once( 'user_api.php' );
-	require_once( 'file_api.php' );
+require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/custom_file_api.php' );
 
-	require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/custom_file_api.php' );
+require_once( 'Net/POP3.php' );
+require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Net/IMAP_1.0.3.php' );
 
-	require_once( 'Net/POP3.php' );
-	require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Net/IMAP_1.0.3.php' );
-
-	require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/config_api.php' );
-	require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/Parser.php' );
-	require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/simple_html_dom.php');
+require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/config_api.php' );
+require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/Parser.php' );
+require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/simple_html_dom.php');
 
 class ERP_mailbox_api
 {
@@ -83,6 +88,14 @@ class ERP_mailbox_api
 	private $_default_bug_view_status;
 
 	private $_max_file_size;
+  
+  // TESI
+  public  $mail_tags;
+  public  $mail_substr;
+  public  $mail_tags_exclude;
+  public  $cfCacheByName;
+  public  $categoryCache;
+
 
 	# --------------------
 	# Retrieve all necessary configuration options
@@ -330,6 +343,7 @@ class ERP_mailbox_api
 									$t_isdeleted_count = 0;
 
 									$t_numMsg = $this->_mailserver->numMsg();
+                                    echo "\n (tesi) Number of Messages to process:" . $t_numMsg . "\n";
 									if ( !$this->pear_error( $t_numMsg ) && $t_numMsg > 0 )
 									{
 										$t_allowed_numMsg = $this->check_fetch_max( $t_numMsg, $t_total_fetch_counter );
@@ -346,7 +360,7 @@ class ERP_mailbox_api
 											}
 											else
 											{
-												$this->process_single_email( $i, (int) $t_project[ 'id' ] );
+												$this->process_single_email($i, (int) $t_project[ 'id' ],(int)$t_project['mail_manager']);
 
 												$this->_mailserver->deleteMsg( $i );
 
@@ -396,7 +410,8 @@ class ERP_mailbox_api
 
 	# --------------------
 	# Process a single email from either a pop3 or imap mailbox
-	private function process_single_email( $p_i, $p_overwrite_project_id = FALSE )
+    # TESI - $p_mail_manager
+	private function process_single_email( $p_i, $p_overwrite_project_id = FALSE, $p_mail_manager = 0) 
 	{
 		$this->show_memory_usage( 'Start process single email' );
 
@@ -418,7 +433,42 @@ class ERP_mailbox_api
 			// We don't need to validate the email address if it is an existing user (existing user also needs to be set as the reporter of the issue)
 			if ( $t_email[ 'Reporter_id' ] !== $this->_mail_reporter_id || $this->validate_email_address( $t_email[ 'From_parsed' ][ 'email' ] ) )
 			{
-				$this->add_bug( $t_email, $p_overwrite_project_id );
+        // TESI
+        // Analize Subject in order to understand if special logic (for Fusion Reactor)
+        // needs to be applied.
+        $my_project_id = -1;
+				foreach($this->mail_tags as $needle => $pdata)
+				{
+					if(strpos($t_email['Subject'],$needle) !== FALSE)
+					{
+						$my_project_id = $pdata['id'];
+						break;						
+					}
+				}
+				
+				// TESI                  
+				// This logic allow EXCLUSION of mails based on SUBJECT
+				//
+				$doAdd = ($my_project_id > 0 || ($my_project_id < 0 && $p_mail_manager == 0));
+				if($doAdd && !is_null($this->mail_tags_exclude[$my_project_id])) 
+				{
+					foreach($this->mail_tags_exclude[$my_project_id] as $martian )
+					{
+						if(strpos($t_email['Subject'],$martian['needle']) !== FALSE)
+						{
+							// echo "\n (tesi) - Exclusion done on:' . $t_email['Subject'] . "\n";
+							$doAdd = false;
+							break;						
+						}
+					}
+				}				
+				
+				// TESI
+				if($doAdd)
+				{  
+          echo "\n (tesi) - READY TO ADD BUG";
+					$this->add_bug( $t_email, ($my_project_id > 0 ? $my_project_id :$p_overwrite_project_id) );
+				}	
 			}
 			else
 			{
@@ -457,6 +507,8 @@ class ERP_mailbox_api
 
 		$t_email[ 'X-Mantis-Parts' ] = $t_mp->parts();
 
+		$t_email[ 'dateAsString' ] = $t_mp->getDateAsString();  // TESI    
+    
 		if ( $this->_mail_use_bug_priority )
 		{
 			$t_priority = strtolower( $t_mp->priority() );
@@ -581,10 +633,33 @@ class ERP_mailbox_api
 	# --------------------
 	# Adds a bug which is reported via email
 	# Taken from bug_report.php in MantisBT 1.2.0
+  # Changed by TESI
 	private function add_bug( &$p_email, $p_overwrite_project_id = FALSE )
 	{
 		$this->show_memory_usage( 'Start add bug' );
 
+    // TESI
+		$t_project_id = ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id;
+		$add_as_note = false;
+    
+    // TESI
+		$target = array();
+    $target['mantis_begin'] = 'mantis_begin';
+		$target['mantis_end'] = 'mantis_end';
+		
+		$area = array();
+        $area['mantis_begin'] = stripos($p_email['X-Mantis-Body'],$target['mantis_begin']);
+		$area['mantis_end'] = stripos($p_email['X-Mantis-Body'],$target['mantis_end']);           		
+		
+		$embdata = null;
+		if( ($area['mantis_begin'] !== FALSE) && ($area['mantis_end'] !== FALSE) )
+		{
+			// var_dump($area);
+			//echo __FUNCTION__ . ":$$: GOING TO DIE\n";
+			$embdata = $this->extractEmbedded($p_email,$t_project_id,$area,$target);	
+		}	
+
+		list($p_email['Subject'],$p_email['FusionReactor']) = $this->build_subject($p_email,$t_project_id);
 		if ( $this->_mail_add_bugnotes )
 		{
 			$t_bug_id = $this->mail_is_a_bugnote( $p_email[ 'Subject' ] );
@@ -594,7 +669,16 @@ class ERP_mailbox_api
 			$t_bug_id = FALSE;
 		}
 
-		if ( $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
+  // TESI
+if($t_bug_id === false)
+		{
+			$t_bug_id = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
+			$add_as_note = intval($t_bug_id) > 0 ? TRUE : FALSE;
+			echo 'DEBUG WILL ADD AS NOTE? ' . intval($t_bug_id);
+		}
+
+		// TESI
+		if ( $add_as_note === FALSE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
 //			access_ensure_bug_level( config_get( 'add_bugnote_threshold' ), $f_bug_id );
@@ -621,6 +705,37 @@ class ERP_mailbox_api
 				bugnote_add( $t_bug_id, $t_description );
 			}
 		}
+		elseif ($add_as_note === TRUE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
+		{
+			// TESI
+			//echo '$this->mail_substr'; var_dump($this->mail_substr);
+			//echo '$this->mail_substr[' . $t_project_id . ']'; var_dump($this->mail_substr[$t_project_id]);
+
+			// if we have another string to search on subject we apply special process.
+			$doStandard = true;
+			if( isset($this->mail_substr[$t_project_id]) )
+			{
+        // 20121113 - return change
+				$msg2write = $this->apply_mail_save_from($p_email['From'],$p_email['X-Mantis-Body']);
+				list($doStandard,$dummy,$saveAsAttach) = $this->process_substr($p_email['Subject'],$p_email['FusionReactor'],
+															                                         $msg2write,$this->mail_substr[$t_project_id]);
+			}
+			
+			if( $doStandard )
+			{
+				$dummy = $this->apply_mail_save_from($p_email['From'], $p_email['dateAsString']);
+			}
+			bugnote_add($t_bug_id, $dummy);
+		
+			if($saveAsAttach)  // francisco 20121113
+			{
+        //echo "\n BUGNOTE_ADD ::::: GOING TO USE bruteForceAddFile\n";  echo "\n " . $msg2write . "\n"; echo "\n DIE"; die();
+			  if( !is_null($msg = $this->bruteForceAddFile($t_bug_id,$msg2write) ) )
+			  {
+			    bugnote_add($t_bug_id, 'Error Attaching:' . $msg );
+			  }
+   		} 
+		}
 		elseif ( $this->_mail_add_bug_reports )
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
@@ -640,7 +755,10 @@ class ERP_mailbox_api
 			$t_bug_data->handler_id				= 0;
 			$t_bug_data->view_state				= $this->_default_bug_view_status;
 
-			$t_bug_data->category_id			= $this->_mailbox[ 'global_category_id' ];
+			// TESI - Change for EMBEDDED DATA - Delsanto
+			$t_bug_data->category_id = isset($embdata['field']['category_id']) ? $embdata['field']['category_id'] : 
+																				$this->_mailbox[ 'global_category_id' ];
+
 			$t_bug_data->reproducibility		= $this->_default_bug_reproducibility;
 			$t_bug_data->severity				= $this->_default_bug_severity;
 			$t_bug_data->priority				= $p_email[ 'Priority' ];
@@ -650,13 +768,25 @@ class ERP_mailbox_api
 			$t_bug_data->status					= $this->_bug_submit_status;
 			$t_bug_data->summary				= $p_email[ 'Subject' ];
 
-			$t_bug_data->description			= $this->apply_mail_save_from( $p_email[ 'From' ], $p_email[ 'X-Mantis-Body' ] );
+
+			// TESI
+			// if we have another string to search on subject we apply special process.
+			$t_bug_data->description = $mgs2write = $this->apply_mail_save_from($p_email['From'], $p_email['X-Mantis-Body']);
+			if( isset($this->mail_substr[$t_project_id]) )
+			{
+				// echo '%% GOING TO ADD THROUGH process_substr %%' . "\n";
+				list($doStandard,$t_bug_data->description,$saveAsAttach) = $this->process_substr($t_bug_data->summary,
+		                                                                       $p_email['FusionReactor'],
+																				                                   $mgs2write,	
+																				                                   $this->mail_substr[$t_project_id]);
+			}
 
 			$t_bug_data->steps_to_reproduce		= $this->_default_bug_steps_to_reproduce;
 			$t_bug_data->additional_information	= $this->_default_bug_additional_info;
 			$t_bug_data->due_date				= date_get_null();
 
-			$t_bug_data->project_id				= ( ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id );
+			// $t_bug_data->project_id				= ( ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id );
+      		$t_bug_data->project_id = $t_project_id;  // Tesi
 
 			$t_bug_data->reporter_id			= $p_email[ 'Reporter_id' ];
 
