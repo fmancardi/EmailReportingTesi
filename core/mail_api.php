@@ -794,6 +794,22 @@ class ERP_mailbox_api
 			# Create the bug
 			$t_bug_id = $t_bug_data->create();
 
+            // TESI
+			// now add custom fields
+			// function custom_field_value_to_database( $p_value, $p_type ) {
+			if(!is_null($embdata))
+			{
+				foreach($embdata['cf'] as $cfname => $cfdata)
+				{
+					// var_dump($this->cfCacheByName[$cfname]);
+					// var_dump($cfname);
+					// var_dump($cfdata);
+					$val4db = custom_field_value_to_database($cfdata,$this->cfCacheByName[$cfname]['type']);
+					custom_field_set_value($this->cfCacheByName[$cfname]['id'],$t_bug_id, $val4db);
+				}
+			}
+
+
 			// Lets link a readonly already existing bug to the newly created one
 			if ( $f_master_bug_id > 0 )
 			{
@@ -819,6 +835,16 @@ class ERP_mailbox_api
 			event_signal( 'EVENT_REPORT_BUG', array( $t_bug_data, $t_bug_id ) );
 
 			email_new_bug( $t_bug_id );
+
+			// TESI
+			if($saveAsAttach)
+			{
+			  if( !is_null($msg = $this->bruteForceAddFile($t_bug_id,$mgs2write)))
+			  {
+			    bugnote_add($t_bug_id, 'Error Attaching:' . $msg );
+			  }
+			} 
+      
 		}
 		else
 		{
@@ -1114,6 +1140,28 @@ class ERP_mailbox_api
 		return( FALSE );
 	}
 
+    // TESI
+	private function mail_get_by_context($p_mail_subject,$p_project_id )
+	{
+		
+		$c_project_id = (int) $p_project_id;
+		$t_bug_table = db_get_table( 'mantis_bug_table' );
+	
+		$query = "SELECT id
+					  FROM $t_bug_table
+					  WHERE project_id=" . db_param() . ' AND summary=' . db_param();
+					  
+		$result = db_query_bound( $query, Array( $c_project_id, $p_mail_subject ) );
+		if( 0 == db_num_rows( $result ) ) 
+		{
+			return FALSE;
+		}
+		
+		$row = db_fetch_array( $result );
+		return $row['id'];
+	}
+  
+  
 	# --------------------
 	# return the bug's id from the subject
 	private function get_bug_id_from_subject( $p_mail_subject )
@@ -1222,8 +1270,287 @@ class ERP_mailbox_api
 			);
 		}
 	}
-}
+  
+  
+  // TESI  
+ 	function set_mail_tags($val)
+	{
+		$this->mail_tags = $val;	
+	}
 
+ 	function set_mail_substr($val)
+	{
+		$this->mail_substr = $val;	
+	}
+
+ 	function set_mail_tags_exclude($val)
+	{
+		$this->mail_tags_exclude = $val;	
+	}
+ 
+  // 20121113 - francisco
+	function process_substr($p_subject,$p_fusion,$p_body,$p_needles)
+	{           
+		$doStandard = true; 
+		$addFullMailAsAttachment = false;
+		$str = $p_body;       
+		// echo "\n (tesi) " . __FUNCTION__ . '::' . $p_fusion;
+		if( !is_null($p_fusion) )
+		{
+		  $doStandard = false;
+      $addFullMailAsAttachment = true;
+		  $needle = 'Complete details for all running requests appear';
+      $where = strpos($p_body,$needle);
+      $len2get = ($where === FALSE) ? 1800 : ($where-strlen($needle));
+		  $str = substr($p_body,0,$len2get);
+		  // echo "\n (tesi) QTY GOT " . __FUNCTION__ . ":: GOT {$len2get} CHARACTERS \n";
+		}
+		else
+		{
+  		foreach($p_needles as $elem)
+  		{
+  			if(strpos($p_subject,$elem['needle']) !== FALSE)
+  			{
+  				$str = substr($p_body,0,$elem['len']);
+  				$doStandard = false;
+  				break;						
+  			}
+  		}
+	  }
+		return array($doStandard,$str,$addFullMailAsAttachment);			
+  }  
+
+  
+  // 20121106 - francisco
+  // 20120910 - francisco
+	function build_subject($t_email,$t_project_id)
+	{           
+		// echo __METHOD__ . "\n";	echo 't_mail:' . $t_email['Subject'] . " \n";
+    $pos = array();
+    $cfg = $this->getFusionReactorCfg();
+  	$targetKey = null;
+  		
+  	// if we found FusionReactor We need to go for other info
+  	$pageURL = '';     
+  	// echo "\n(tesi) Subject:" . $t_email['Subject'] . "\n";
+		if(strpos($t_email['Subject'],$cfg->fusionReactorTag) !== FALSE)
+		{   
+      // Go for FR type
+      $key2search = array_keys($cfg->newSubject);
+      foreach($key2search as $key)
+      {
+      	if( strpos($t_email['X-Mantis-Body'],$cfg->target[$key]) !== FALSE )
+      	{
+      		$targetKey = $key;
+      		break;
+      	}
+      }
+
+      // echo "\n (tesi) Looking for: $targetKey \n";      
+      if( $targetKey == 'RunTimeAlert' )
+      {                                       
+ 			  // echo "\n (tesi) Process RunTimeAlert\n"; 
+        $pos['RequestURL'] = strpos($t_email['X-Mantis-Body'],$cfg->target['RequestURL']);
+  			$pos['Status'] = strpos($t_email['X-Mantis-Body'],$cfg->target['Status']);           		
+              
+        $pageURL = '';
+        if($pos['RequestURL'] !== FALSE)
+        {
+        	$start = $pos['RequestURL'] + strlen($cfg->target['RequestURL']);
+        	$size = $pos['Status'] - $start;
+        	$pageURL = ' - ' . trim(substr($t_email['X-Mantis-Body'],$start,$size));
+          // echo "\n(tesi) PAGE URL:::" . $pageURL . "\n";
+        }
+      }
+
+	  }
+    $nt = is_null($targetKey) ? $t_email['Subject'] :
+          ($cfg->fusionReactorTag . ' - ' . $cfg->newSubject[$targetKey] . $pageURL);
+    return array($nt,$targetKey);;
+	}
+
+  // 20121113 - francisco
+  function getFusionReactorCfg()
+  {
+  	$cfg = new stdClass();
+  	$cfg->fusionReactorTag = 'FusionReactor';
+  	$cfg->target['RequestURL'] = 'Request URL: ';
+		$cfg->target['Status'] = 'Status:';           		
+  	$cfg->target['RunTimeAlert'] = 'Request Run Time Alert';   
+  	$cfg->target['MemoryAlert'] = 'Memory Shortage Alert';        		
+
+  	$cfg->newSubject = array();
+  	$cfg->newSubject['RunTimeAlert'] = 'Run Time';   
+  	$cfg->newSubject['MemoryAlert'] = 'Memory';        		
+    return $cfg;
+   }                
+
+   // 20121113 - francisco
+	  private function bruteForceAddFile($p_bug_id,$p_msg)
+	  {
+      // echo "\n(tesi) START FUNCTION::::: " . __FUNCTION__ . "::\n";
+    	$t_strlen_body = strlen(trim($p_msg));
+      $msg = null;
+      if( 0 == $t_strlen_body )
+	  	{
+	  	  $msg = 'attachment size is zero (' . $t_strlen_body . ' / ' . $this->_max_file_size . ')' . "\n";
+	  	}
+	  	elseif( $t_strlen_body > $this->_max_file_size )
+	  	{
+	  	  $msg ='attachment size exceeds maximum allowed file size (' . $t_strlen_body . ' / ' . $this->_max_file_size . ')' . "\n";
+	  	}
+	  	else
+	  	{
+	  		$t_file_number = 0;
+	  		$t_opt_name = '';
+	  		while ( !file_is_name_unique( $t_opt_name . $p_bug_id, $p_bug_id ) )
+	  		{
+	  			$t_file_number++;
+	  			$t_opt_name = $t_file_number . '-';
+	  		}
+	  		$t_file_name = $this->_mail_tmp_directory . '/' . md5(microtime());
+	  		// echo "\n TEMP FN " . $t_file_name . "\n";
+	  		file_put_contents($t_file_name, $p_msg);
+	  		ERP_custom_file_add( $p_bug_id, array('tmp_name'	=> realpath( $t_file_name ),
+	  			                                    'name'		=> $t_opt_name . $p_bug_id . '-' . md5(microtime()) . '.txt',
+	  			                                    'type'		=> 'text/plain',
+	  			                                    'error'		=> NULL), 'bug' );
+    		if ( is_file( $t_file_name ) )
+			  {
+				  unlink( $t_file_name );
+			  }
+	  	}
+	  	return $msg;
+	  }
+  
+ 
+
+
+ 
+  	// 20120920
+  	function extractEmbedded($p_email,$p_project_id,$limits,$tags)
+  	{
+  		// Configuration
+  		$cfSet = array_flip(array('priorita_cliente','est.work','data_richiesta_rilascio','risorsa_prepianif'));
+		$fieldSet = array('categoria' => 'category_id');
+
+  		// get area
+        $start = $limits['mantis_begin']+strlen($tags['mantis_begin']);
+        $size = $limits['mantis_end']-$start;
+  		$cfg = substr(strtolower($p_email['X-Mantis-Body']),$start,$size);
+
+		// From stackoverflow
+		// http://stackoverflow.com/questions/1701339/how-to-transform-a-string-from-multi-line-to-single-line-in-php
+		$cfg = str_replace(array("\n", "\r"," "), '', $cfg);
+  		$dummy = explode(',',$cfg);
+		$ret = array('cf' => array(), 'field' => array());
+		
+		// Get default category
+		if(!isset($this->categoryCache['by Mail']))
+		{
+	        $val = $this->category_get_by_name($p_project_id,'by Mail');
+    	    if(is_null($val))
+        	{
+				$this->categoryCache['by Mail'] = 0;			
+        	}
+        	else
+        	{
+				$this->categoryCache['by Mail'] = $val['id'];			
+        	}
+		}
+
+        foreach($dummy as $elem)
+        {
+        	$xx = explode('=',$elem);
+        	if( isset($cfSet[$xx[0]]) )
+        	{
+        		//echo 'Going to add:' . $xx[0] . "\n"; 
+        		$ret['cf'][$xx[0]] = $xx[1];
+        		
+        		if( !isset($this->cfCacheByName[$xx[0]]) )
+        		{
+	        		$cf = $this->custom_field_get_by_name($xx[0]);
+	        		$cfID = 0;
+	        		$cfType = -1;
+    	    		if( !is_null($cf) )
+        			{
+        				$cfID = $cf['id'];
+        				$cfType = $cf['type'];
+        			}
+        			$this->cfCacheByName[$xx[0]] = array('id' => $cfID, 'type' => $cfType);
+        		}
+        	}
+        	if( isset($fieldSet[$xx[0]]) )
+        	{
+        		// echo 'IN FIELD>>';  echo $xx[0];
+        		switch($xx[0])
+        		{
+        			case 'categoria':
+						if(!isset($this->categoryCache[$xx[1]]))
+						{
+					        $val = $this->category_get_by_name($p_project_id,$xx[1]);
+				    	    if(is_null($val))
+				        	{
+								$this->categoryCache[$xx[1]] = $this->categoryCache['by Mail'];			
+				        	}
+				        	else
+				        	{
+								$this->categoryCache[$xx[1]] = $val['id'];			
+				        	}
+						}
+        				$ret['field'][$fieldSet[$xx[0]]] = $this->categoryCache[$xx[1]];
+        			break;
+        			
+        			default:
+        				$ret['field'][$fieldSet[$xx[0]]] = $xx[1];
+        			break;	
+        		}	
+        	}
+        }
+        // var_dump($ret);
+        // die();
+        return $ret;
+  	}
+  	
+  	
+	function custom_field_get_by_name($p_name) 
+	{
+		$t_custom_field_table = db_get_table( 'mantis_custom_field_table' );
+		$query = "SELECT id,type
+				  FROM $t_custom_field_table
+				  WHERE name=" . db_param();
+		$result = db_query_bound( $query, Array( $p_name ) );
+		$row = db_fetch_array( $result );
+		return $row;
+	}
+
+  	
+	function category_get_by_name($p_project_id,$p_name) 
+	{
+		$c_category_id = db_prepare_int( $p_category_id );
+		$t_category_table = db_get_table( 'mantis_category_table' );
+		$t_project_table = db_get_table( 'mantis_project_table' );
+	
+		$query = " SELECT * FROM $t_category_table WHERE project_id=" . db_param() .
+				 " AND name=" . db_param();
+				 
+		$result = db_query_bound( $query, array($p_project_id,$p_name) );
+		$count = db_num_rows( $result );
+		if( 0 == $count ) 
+		{
+			return 0;
+		}
+	
+		$row = db_fetch_array( $result );
+		var_dump($row);
+		// echo 'DIE: on' . __FUNCTION__;
+		return $row;
+	}
+  
+}  // class end
+
+
+# FUNCTIONS OUTSIDE CLASS SCOPE
 	# --------------------
 	# This function formats the bytes so that they are easily readable.
 	# Not part of a class
