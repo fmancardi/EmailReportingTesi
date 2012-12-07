@@ -669,8 +669,8 @@ class ERP_mailbox_api
 			$t_bug_id = FALSE;
 		}
 
-  // TESI
-if($t_bug_id === false)
+    // TESI
+    if($t_bug_id === false)
 		{
 			$t_bug_id = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
 			$add_as_note = intval($t_bug_id) > 0 ? TRUE : FALSE;
@@ -681,7 +681,7 @@ if($t_bug_id === false)
 		if ( $add_as_note === FALSE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
-//			access_ensure_bug_level( config_get( 'add_bugnote_threshold' ), $f_bug_id );
+      // access_ensure_bug_level( config_get( 'add_bugnote_threshold' ), $f_bug_id );
 
 			$t_description = $p_email[ 'X-Mantis-Body' ];
 
@@ -715,7 +715,6 @@ if($t_bug_id === false)
 			$doStandard = true;
 			if( isset($this->mail_substr[$t_project_id]) )
 			{
-        // 20121113 - return change
 				$msg2write = $this->apply_mail_save_from($p_email['From'],$p_email['X-Mantis-Body']);
 				list($doStandard,$dummy,$saveAsAttach) = $this->process_substr($p_email['Subject'],$p_email['FusionReactor'],
 															                                         $msg2write,$this->mail_substr[$t_project_id]);
@@ -729,7 +728,6 @@ if($t_bug_id === false)
 		
 			if($saveAsAttach)  // francisco 20121113
 			{
-        //echo "\n BUGNOTE_ADD ::::: GOING TO USE bruteForceAddFile\n";  echo "\n " . $msg2write . "\n"; echo "\n DIE"; die();
 			  if( !is_null($msg = $this->bruteForceAddFile($t_bug_id,$msg2write) ) )
 			  {
 			    bugnote_add($t_bug_id, 'Error Attaching:' . $msg );
@@ -739,7 +737,7 @@ if($t_bug_id === false)
 		elseif ( $this->_mail_add_bug_reports )
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
-//			access_ensure_project_level( config_get('report_bug_threshold' ) );
+      // access_ensure_project_level( config_get('report_bug_threshold' ) );
 
 			$f_master_bug_id = ( ( $t_bug_id !== FALSE && bug_is_readonly( $t_bug_id ) ) ? $t_bug_id : 0 );
 
@@ -774,7 +772,6 @@ if($t_bug_id === false)
 			$t_bug_data->description = $mgs2write = $this->apply_mail_save_from($p_email['From'], $p_email['X-Mantis-Body']);
 			if( isset($this->mail_substr[$t_project_id]) )
 			{
-				// echo '%% GOING TO ADD THROUGH process_substr %%' . "\n";
 				list($doStandard,$t_bug_data->description,$saveAsAttach) = $this->process_substr($t_bug_data->summary,
 		                                                                       $p_email['FusionReactor'],
 																				                                   $mgs2write,	
@@ -786,58 +783,16 @@ if($t_bug_id === false)
 			$t_bug_data->due_date				= date_get_null();
 
 			// $t_bug_data->project_id				= ( ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id );
-      		$t_bug_data->project_id = $t_project_id;  // Tesi
+      $t_bug_data->project_id = $t_project_id;  // TESI
 
 			$t_bug_data->reporter_id			= $p_email[ 'Reporter_id' ];
 
-			// @TODO@ Disabled for now but possibly needed for other future features
-			# Validate the custom fields before adding the bug.
-/*			$t_related_custom_field_ids = custom_field_get_linked_ids( $t_bug_data->project_id );
-			foreach( $t_related_custom_field_ids as $t_id )
-			{
-				$t_def = custom_field_get_definition( $t_id );
-
-				# Produce an error if the field is required but wasn't posted
-				if ( !gpc_isset_custom_field( $t_id, $t_def['type'] ) &&
-					( $t_def['require_report'] ||
-						$t_def['type'] == CUSTOM_FIELD_TYPE_ENUM ||
-						$t_def['type'] == CUSTOM_FIELD_TYPE_LIST ||
-						$t_def['type'] == CUSTOM_FIELD_TYPE_MULTILIST ||
-						$t_def['type'] == CUSTOM_FIELD_TYPE_RADIO ) ) {
-					error_parameters( lang_get_defaulted( custom_field_get_field( $t_id, 'name' ) ) );
-					trigger_error( ERROR_EMPTY_FIELD, ERROR );
-				}
-				if ( !custom_field_validate( $t_id, gpc_get_custom_field( "custom_field_$t_id", $t_def['type'], NULL ) ) )
-				{
-					error_parameters( lang_get_defaulted( custom_field_get_field( $t_id, 'name' ) ) );
-					trigger_error( ERROR_CUSTOM_FIELD_INVALID_VALUE, ERROR );
-				}
-			}*/
-
-			# Allow plugins to pre-process bug data
+  		# Allow plugins to pre-process bug data
 			$t_bug_data = event_signal( 'EVENT_REPORT_BUG_DATA', $t_bug_data );
 			$t_bug_data = event_signal( 'EVENT_ERP_REPORT_BUG_DATA', $t_bug_data );
 
 			# Create the bug
 			$t_bug_id = $t_bug_data->create();
-
-			// @TODO@ Disabled for now but possibly needed for other future features
-			# Handle custom field submission
-/*			foreach( $t_related_custom_field_ids as $t_id )
-{
-				# Do not set custom field value if user has no write access.
-				if( !custom_field_has_write_access( $t_id, $t_bug_id ) )
-				{
-					continue;
-				}
-
-				$t_def = custom_field_get_definition( $t_id );
-				if( !custom_field_set_value( $t_id, $t_bug_id, gpc_get_custom_field( "custom_field_$t_id", $t_def['type'], '' ), false ) ) {
-				{
-					error_parameters( lang_get_defaulted( custom_field_get_field( $t_id, 'name' ) ) );
-					trigger_error( ERROR_CUSTOM_FIELD_INVALID_VALUE, ERROR );
-				}
-			}*/
 
 			// Lets link a readonly already existing bug to the newly created one
 			if ( $f_master_bug_id > 0 )
@@ -873,7 +828,6 @@ if($t_bug_id === false)
 		}
 
 		$this->custom_error( 'Reporter: ' . $p_email[ 'Reporter_id' ] . ' - ' . $p_email[ 'From_parsed' ][ 'email' ] . ' --> Issue ID: #' . $t_bug_id );
-
 		$this->show_memory_usage( 'Start processing attachments' );
 
 		# Add files
