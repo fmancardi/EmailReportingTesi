@@ -22,6 +22,7 @@ class ERP_Mail_Parser
 	private $_ctype = array();
 
 	private $_mb_list_encodings = array();
+	private $_dateAsString;  // TESI
 
 	public function __construct( $options )
 	{
@@ -104,6 +105,13 @@ class ERP_Mail_Parser
 		}
 	}
 
+    // TESI
+    public function getDateAsString()
+	{
+		return( $this->_dateAsString );
+	}
+  
+  
 	public function from()
 	{
 		return( $this->_from );
@@ -135,6 +143,9 @@ class ERP_Mail_Parser
 		$this->setSubject( $structure->headers['subject'] );
 		$this->setContentType( $structure->ctype_primary, $structure->ctype_secondary );
 
+		// TESI
+		$this->setDateAsString( $structure->headers['date'] );
+    
 		if ( isset( $structure->ctype_parameters[ 'charset' ] ) )
 		{
 			$this->setCharset( $structure->ctype_parameters[ 'charset' ] );
@@ -161,6 +172,13 @@ class ERP_Mail_Parser
 		}
 	}
 
+    // TESI
+ 	private function setDateAsString( $val )
+	{
+		$this->_dateAsString = $val;
+	}
+ 
+  
 	private function setFrom( $from )
 	{
 		$this->_from = $from;
