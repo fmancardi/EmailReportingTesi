@@ -343,7 +343,7 @@ class ERP_mailbox_api
 									$t_isdeleted_count = 0;
 
 									$t_numMsg = $this->_mailserver->numMsg();
-                                    echo "\n (tesi) Number of Messages to process:" . $t_numMsg . "\n";
+                  echo "\n (tesi) Number of Messages to process:" . $t_numMsg . "\n";
 									if ( !$this->pear_error( $t_numMsg ) && $t_numMsg > 0 )
 									{
 										$t_allowed_numMsg = $this->check_fetch_max( $t_numMsg, $t_total_fetch_counter );
@@ -360,10 +360,15 @@ class ERP_mailbox_api
 											}
 											else
 											{
-												$this->process_single_email($i, (int) $t_project[ 'id' ],(int)$t_project['mail_manager']);
-
-												$this->_mailserver->deleteMsg( $i );
-
+												if( $this->process_single_email($i, (int) $t_project[ 'id' ],(int)$t_project['mail_manager']) )
+												{
+												  $this->_mailserver->deleteMsg( $i );
+                          echo "\n (tesi) Mail Deleted - After process_single_mail()\n";
+                        }
+                        else
+                        {
+                          echo "\n (tesi) NO MAIL DELETED - After process_single_mail()\n";
+                        }
 												$t_total_fetch_counter++;
 											}
 										}
@@ -414,17 +419,12 @@ class ERP_mailbox_api
 	private function process_single_email( $p_i, $p_overwrite_project_id = FALSE, $p_mail_manager = 0) 
 	{
 		$this->show_memory_usage( 'Start process single email' );
-
 		$t_msg = $this->_mailserver->getMsg( $p_i );
-
 		$this->save_message_to_file( $t_msg );
-
 		$t_email = $this->parse_content( $t_msg );
-
 		unset( $t_msg );
 
 		$this->show_memory_usage( 'Parsed single email' );
-
 		$this->save_message_to_file( $t_email );
 
 		// Only continue if we have a valid Reporter to work with
@@ -477,6 +477,9 @@ class ERP_mailbox_api
 		}
 
 		$this->show_memory_usage( 'Finished process single email' );
+
+    return $doAdd;
+    
 	}
 
 	# --------------------
