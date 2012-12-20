@@ -20,7 +20,7 @@ require_once( 'custom_field_api.php' ); // TESI
 
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/custom_file_api.php' );
 
-require_once( 'Net/POP3.php' );
+require_once( 'Net/POP3.php' );                                         
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Net/IMAP_1.0.3.php' );
 
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/config_api.php' );
@@ -95,14 +95,18 @@ class ERP_mailbox_api
   public  $mail_tags_exclude;
   public  $cfCacheByName;
   public  $categoryCache;
+  public  $resolvedStatusSet;
+
 
 
 	# --------------------
 	# Retrieve all necessary configuration options
 	public function __construct( $p_test_only = FALSE )
 	{
-		$this->_test_only = $p_test_only;
+    // TESI	  
+	  $this->resolvedStatusSet = array('80' => 80,'90' => 90);
 
+		$this->_test_only = $p_test_only;
 		$this->_mail_add_bug_reports			= plugin_config_get( 'mail_add_bug_reports' );
 		$this->_mail_add_bugnotes				= plugin_config_get( 'mail_add_bugnotes' );
 		$this->_mail_add_complete_email			= plugin_config_get( 'mail_add_complete_email' );
@@ -418,7 +422,8 @@ class ERP_mailbox_api
 
 	# --------------------
 	# Process a single email from either a pop3 or imap mailbox
-    # TESI - $p_mail_manager
+  # TESI - $p_mail_manager
+  #
 	private function process_single_email( $p_i, $p_overwrite_project_id = FALSE, $p_mail_manager = 0) 
 	{
 	  $ticket_id = null;
@@ -471,7 +476,7 @@ class ERP_mailbox_api
 				// TESI
 				if($doAdd)
 				{  
-          echo "\n (tesi) - READY TO ADD BUG";
+          echo "\n (tesi) - READY TO DO PROCESSING TO UNDERSTAND IF BUG CAN BE REALLY ADDED";
 					$ticket_id = $this->add_bug( $t_email, ($my_project_id > 0 ? $my_project_id :$p_overwrite_project_id) );
 				}	
 			}
@@ -642,6 +647,7 @@ class ERP_mailbox_api
 	# Adds a bug which is reported via email
 	# Taken from bug_report.php in MantisBT 1.2.0
   # Changed by TESI
+  # 20121220 - will try to check issue status, if Resolved or Closed => DO NOTHING
 	private function add_bug( &$p_email, $p_overwrite_project_id = FALSE )
 	{
 		$this->show_memory_usage( 'Start add bug' );
@@ -650,27 +656,28 @@ class ERP_mailbox_api
 		$t_project_id = ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id;
 		$add_as_note = false;
     
-    // TESI
+    // TESI - FOR Delsanto request
 		$target = array();
     $target['mantis_begin'] = 'mantis_begin';
 		$target['mantis_end'] = 'mantis_end';
-		
 		$area = array();
-        $area['mantis_begin'] = stripos($p_email['X-Mantis-Body'],$target['mantis_begin']);
+    $area['mantis_begin'] = stripos($p_email['X-Mantis-Body'],$target['mantis_begin']);
 		$area['mantis_end'] = stripos($p_email['X-Mantis-Body'],$target['mantis_end']);           		
 		
 		$embdata = null;
 		if( ($area['mantis_begin'] !== FALSE) && ($area['mantis_end'] !== FALSE) )
 		{
-			// var_dump($area);
-			//echo __FUNCTION__ . ":$$: GOING TO DIE\n";
 			$embdata = $this->extractEmbedded($p_email,$t_project_id,$area,$target);	
 		}	
 
 		list($p_email['Subject'],$p_email['FusionReactor']) = $this->build_subject($p_email,$t_project_id);
+
+    $is_resolved = FALSE;
 		if ( $this->_mail_add_bugnotes )
 		{
-			$t_bug_id = $this->mail_is_a_bugnote( $p_email[ 'Subject' ] );
+			$op = $this->mail_is_a_bugnote($p_email[ 'Subject' ]);
+			$t_bug_id = $op['bug_id'];
+			$is_resolved = $op['is_resolved'];
 		}
 		else
 		{
@@ -683,10 +690,27 @@ class ERP_mailbox_api
 			$t_bug_id = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
 			$add_as_note = intval($t_bug_id) > 0 ? TRUE : FALSE;
 			echo 'DEBUG WILL ADD AS NOTE? ' . intval($t_bug_id);
+			
+			if($add_as_note)
+			{
+  		  $fman_bug = bug_cache_row($t_bug_id);
+  			if( $fman_bug !== FALSE )
+  			{
+  			  $is_resolved = isset($this->resolvedStatusSet[$fman_bug['status']]) );
+  			}
+			}
 		}
 
+		// TESI - 20121220
+    if( $is_resolved )
+    {
+      // Bye
+      echo "\n (tesi) We are trying to act on a TICKET {$t_bug_id} that is resolved - SKIP\n";
+      return $t_bug_id;
+    }
+
 		// TESI
-		if ( $add_as_note === FALSE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
+		if($add_as_note === FALSE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
       // access_ensure_bug_level( config_get( 'add_bugnote_threshold' ), $f_bug_id );
@@ -699,9 +723,7 @@ class ERP_mailbox_api
 			# Event integration
 			# Core mantis event already exists within bignote_add function
 			$t_bugnote_text = event_signal( 'EVENT_ERP_BUGNOTE_DATA', $t_description, $t_bug_id );
-
 			$t_status = bug_get_field( $t_bug_id, 'status' );
-
 			if ( $this->_bug_resolved_status_threshold <= $t_status )
 			{
 				# Reopen issue and add a bug note
@@ -746,9 +768,7 @@ class ERP_mailbox_api
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
       // access_ensure_project_level( config_get('report_bug_threshold' ) );
-
 			$f_master_bug_id = ( ( $t_bug_id !== FALSE && bug_is_readonly( $t_bug_id ) ) ? $t_bug_id : 0 );
-
 			$this->fix_empty_fields( $p_email );
 
 			$t_bug_data = new BugData;
@@ -1134,23 +1154,27 @@ class ERP_mailbox_api
 	}
 
 	# --------------------
+	# Will try to get TICKET ID using subject as Access Key.
+	# Will return also boolean is_resolved.
 	# return bug_id if there is a valid mantis bug refererence in subject or return false if not found
+	#
+	# 20121220 - francisco - return type changed
 	private function mail_is_a_bugnote( $p_mail_subject )
 	{
+	  $ret = array('bug_id' => FALSE, 'is_resolved' => FALSE);
 		$t_bug_id = $this->get_bug_id_from_subject( $p_mail_subject );
-
 		if ( $t_bug_id !== FALSE )
 		{
-			if ( bug_exists( $t_bug_id ) )
+		  $bug = bug_cache_row($t_bug_id);
+			if( $bug !== FALSE )
 			{
-				return( $t_bug_id );
+			  $ret = array('bug_id' => $t_bug_id, 'is_resolved' => isset($this->resolvedStatusSet[$bug['status']]) );
 			}
 		}
-
-		return( FALSE );
+		return $ret;
 	}
 
-    // TESI
+  // TESI
 	private function mail_get_by_context($p_mail_subject,$p_project_id )
 	{
 		
