@@ -360,14 +360,17 @@ class ERP_mailbox_api
 											}
 											else
 											{
-												if( $this->process_single_email($i, (int) $t_project[ 'id' ],(int)$t_project['mail_manager']) )
-												{
-												  $this->_mailserver->deleteMsg( $i );
-                          echo "\n (tesi) Mail Deleted - After process_single_mail()\n";
-                        }
-                        else
+											  $op = $this->process_single_email($i, (int) $t_project[ 'id' ],(int)$t_project['mail_manager']);
+												$this->_mailserver->deleteMsg( $i );
+                        $ufeed = array();
+                        $ufeed[] = "\n (tesi) - START FEEDBACK - After process_single_mail()\n" ; 
+                        $ufeed[] = "\n (tesi) - Mail Deleted FROM MAILBOX\n" ; 
+                        $ufeed[] = "\n (tesi) - mail subject: " . $op['subject'] . "\n"; 
+                        $ufeed[] = "\n (tesi) - ticket: " . $op['ticket'] . "\n"; 
+                        $ufeed[] = "\n (tesi) - END FEEDBACK\n"; 
+                        foreach($ufeed as $m)
                         {
-                          echo "\n (tesi) NO MAIL DELETED - After process_single_mail()\n";
+                          echo $m;
                         }
 												$t_total_fetch_counter++;
 											}
@@ -418,6 +421,7 @@ class ERP_mailbox_api
     # TESI - $p_mail_manager
 	private function process_single_email( $p_i, $p_overwrite_project_id = FALSE, $p_mail_manager = 0) 
 	{
+	  $ticket_id = null;
 		$this->show_memory_usage( 'Start process single email' );
 		$t_msg = $this->_mailserver->getMsg( $p_i );
 		$this->save_message_to_file( $t_msg );
@@ -450,6 +454,7 @@ class ERP_mailbox_api
 				// This logic allow EXCLUSION of mails based on SUBJECT
 				//
 				$doAdd = ($my_project_id > 0 || ($my_project_id < 0 && $p_mail_manager == 0));
+				echo "\n line:" . __LINE__ . " - (tesi) - doAdd {$doAdd} - SUBJECT: " . $t_email['Subject'] . "\n";
 				if($doAdd && !is_null($this->mail_tags_exclude[$my_project_id])) 
 				{
 					foreach($this->mail_tags_exclude[$my_project_id] as $martian )
@@ -467,7 +472,7 @@ class ERP_mailbox_api
 				if($doAdd)
 				{  
           echo "\n (tesi) - READY TO ADD BUG";
-					$this->add_bug( $t_email, ($my_project_id > 0 ? $my_project_id :$p_overwrite_project_id) );
+					$ticket_id = $this->add_bug( $t_email, ($my_project_id > 0 ? $my_project_id :$p_overwrite_project_id) );
 				}	
 			}
 			else
@@ -478,7 +483,7 @@ class ERP_mailbox_api
 
 		$this->show_memory_usage( 'Finished process single email' );
 
-    return $doAdd;
+    return array('ticket_created' => $doAdd, 'subject' => $t_email['Subject'], 'ticket:' => $ticket_id);
     
 	}
 
@@ -853,7 +858,7 @@ class ERP_mailbox_api
 		{
 			// Not allowed to add bugs and not allowed / able to add bugnote. Need to stop processing
 			$this->custom_error( 'Not allowed to create a new issue. Email ignored' );
-			return;
+			return $t_bug_id;
 		}
 
 		$this->custom_error( 'Reporter: ' . $p_email[ 'Reporter_id' ] . ' - ' . $p_email[ 'From_parsed' ][ 'email' ] . ' --> Issue ID: #' . $t_bug_id );
@@ -893,6 +898,8 @@ class ERP_mailbox_api
 				}
 			}
 		}
+		
+		return $t_bug_id;
 	}
 
 	# --------------------
