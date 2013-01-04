@@ -11,6 +11,9 @@
 # Changed to implement
 # 1. Special processing for Fusion Reactor mails
 # 2. Special processing for mails with TESI TAGS on mail body
+# 3. If we find match with an issue that is resolved or closed
+#    we are going to create a new one.
+#
 
 require_once( 'bug_api.php' );
 require_once( 'bugnote_api.php' );
@@ -673,40 +676,46 @@ class ERP_mailbox_api
 		list($p_email['Subject'],$p_email['FusionReactor']) = $this->build_subject($p_email,$t_project_id);
 
     $is_resolved = FALSE;
-		if ( $this->_mail_add_bugnotes )
-		{
-			$op = $this->mail_is_a_bugnote($p_email[ 'Subject' ]);
-			$t_bug_id = $op['bug_id'];
-			$is_resolved = $op['is_resolved'];
-		}
-		else
-		{
-			$t_bug_id = FALSE;
-		}
+    if ( $this->_mail_add_bugnotes )
+    {
+      // check if BUGID is present on subject.
+      // do not think for Tesi we are going to follow this path
+      $op = $this->mail_is_a_bugnote($p_email[ 'Subject' ]);
+      $t_bug_id = $op['bug_id'];
+      $is_resolved = $op['is_resolved'];
+    }
+    else
+    {
+      $t_bug_id = FALSE;
+    }
 
     // TESI
     if($t_bug_id === false)
-		{
-			$t_bug_id = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
-			$add_as_note = intval($t_bug_id) > 0 ? TRUE : FALSE;
-			echo 'DEBUG WILL ADD AS NOTE? ' . intval($t_bug_id);
-			
-			if($add_as_note)
-			{
-  		  $fman_bug = bug_cache_row($t_bug_id);
-  			if( $fman_bug !== FALSE )
-  			{
-  			  $is_resolved = isset($this->resolvedStatusSet[$fman_bug['status']]) );
-  			}
-			}
-		}
+    {
+      $t_bug_id = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
+      $add_as_note = intval($t_bug_id) > 0 ? TRUE : FALSE;
+      echo '(tesi) DEBUG WILL ADD AS NOTE? ' . intval($t_bug_id);
+      
+      if($add_as_note)
+      {
+        $fman_bug = bug_cache_row($t_bug_id);
+        if( $fman_bug !== FALSE )
+        {
+          $is_resolved = isset($this->resolvedStatusSet[$fman_bug['status']]);
+        }
+      }
+    }
 
 		// TESI - 20121220
     if( $is_resolved )
     {
       // Bye
-      echo "\n (tesi) We are trying to act on a TICKET {$t_bug_id} that is resolved - SKIP\n";
-      return $t_bug_id;
+      // echo "\n (tesi) We are trying to act on a TICKET {$t_bug_id} that is resolved - SKIP\n";
+      // return $t_bug_id;
+      // 20121221
+      // This way I'm going to force creation of new bug
+      $add_as_note = FALSE;
+      $t_bug_id = FALSE;
     }
 
 		// TESI
@@ -1175,24 +1184,56 @@ class ERP_mailbox_api
 	}
 
   // TESI
+  // Have discovered that MySQL when you try to insert an string longer that
+  // field size, truncate it in silence.
+  // This can be in issue if we compare the actual mail subject with a truncated
+  // version present on DB.
+  // Choose to limit length of comparision to (field len - security factor)
+  //
 	private function mail_get_by_context($p_mail_subject,$p_project_id )
 	{
+		$t_security_factor = 2;
+		$t_summary_field_size = 128;
 		
 		$c_project_id = (int) $p_project_id;
 		$t_bug_table = db_get_table( 'mantis_bug_table' );
 	
-		$query = "SELECT id
-					  FROM $t_bug_table
-					  WHERE project_id=" . db_param() . ' AND summary=' . db_param();
-					  
-		$result = db_query_bound( $query, Array( $c_project_id, $p_mail_subject ) );
-		if( 0 == db_num_rows( $result ) ) 
+		$query = " SELECT id,status FROM $t_bug_table " .
+					   " WHERE project_id=" . db_param() . ' AND summary=' . db_param();
+
+
+		// $result = db_query_bound( $query, Array( $c_project_id, $p_mail_subject ) );
+    $target_subject = substr($p_mail_subject,0,$t_summary_field_size - $t_security_factor);					  
+		$result = db_query_bound( $query, Array( $c_project_id, $target_subject ) );
+
+		$rnum = db_num_rows( $result );
+		if( 0 == $rnum) 
 		{
 			return FALSE;
 		}
-		
-		$row = db_fetch_array( $result );
-		return $row['id'];
+
+    // All these logic is intended to exclude from result set
+    // issues with same SUBJECT but that has been closed.		
+    for($idx = 0; $idx <= $rnum; $idx++)
+    {
+      // From Mantis documentation:
+      // Retrieve the next row returned from a specific database query
+      $row = db_fetch_array($result);
+      if( $idx == 0 )
+      {
+        $pivot_bug_id = $row['id'];  
+        $pivot_status = $row['status'];  
+      }
+      
+      if( !isset($this->resolvedStatusSet[$row['status']]) )
+      {
+         // We need to reuse OPEN Issue => we can return
+         $pivot_bug_id = $row['id'];
+         $pivot_status = $row['status'];
+         break;
+      }
+		}
+		return $pivot_bug_id;
 	}
   
   
@@ -1354,7 +1395,12 @@ class ERP_mailbox_api
 		return array($doStandard,$str,$addFullMailAsAttachment);			
   }  
 
-  
+  // 20130104 - francisco
+  // For mails that are sent to [mon_* have this subject form
+  // [mon_nmcocacola] netmover_cocacola (www.cchbci-trasporti.it) - Element CFC.STATOTIPIDOC ...
+  // We are going to remove useless info
+  // [mon_nmcocacola] netmover_cocacola (www.cchbci-trasporti.it) -
+  //
   // 20121106 - francisco
   // 20120910 - francisco
 	function build_subject($t_email,$t_project_id)
@@ -1396,11 +1442,31 @@ class ERP_mailbox_api
           // echo "\n(tesi) PAGE URL:::" . $pageURL . "\n";
         }
       }
-
 	  }
-    $nt = is_null($targetKey) ? $t_email['Subject'] :
-          ($cfg->fusionReactorTag . ' - ' . $cfg->newSubject[$targetKey] . $pageURL);
-    return array($nt,$targetKey);;
+
+    if( is_null($targetKey) )
+    {
+      // Try to understand if is mail for monitor system
+      $nt = $t_email['Subject'];
+      if( strpos($nt,'[mon_') !== FALSE )
+      {
+        echo "(tesi) Trying TO CUT \n";
+        // will cut, looking for first ' - '
+        $cut_point = ' - ';
+        $cut_len = strlen($cut_point);
+        if( ($start = strpos($nt,$cut_point)) !== FALSE )
+        {
+          $end = strlen($nt) - $start - $cut_len;
+          $nt = substr($nt,$start + $cut_len, $end);
+          echo '(tesi) **** new subject:' . $xnt . "\n";
+        }
+      }
+    }
+    else
+    {
+      $nt = ($cfg->fusionReactorTag . ' - ' . $cfg->newSubject[$targetKey] . $pageURL);
+    }
+    return array($nt,$targetKey);
 	}
 
   // 20121113 - francisco
