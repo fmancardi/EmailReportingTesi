@@ -100,6 +100,7 @@ class ERP_mailbox_api
   public  $categoryCache;
   public  $resolvedStatusSet;
 
+  define("DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND", false);
 
 
 	# --------------------
@@ -698,7 +699,8 @@ class ERP_mailbox_api
       
       if($add_as_note)
       {
-        $fman_bug = bug_cache_row($t_bug_id);
+        // Because we are working without GUI, do not want trigger error
+        $fman_bug = bug_cache_row($t_bug_id,DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND);
         if( $fman_bug !== FALSE )
         {
           $is_resolved = isset($this->resolvedStatusSet[$fman_bug['status']]);
@@ -719,7 +721,7 @@ class ERP_mailbox_api
     }
 
 		// TESI
-		if($add_as_note === FALSE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
+		if($add_as_note === FALSE && $t_bug_id !== FALSE && intval($t_bug_id) >0 && !bug_is_readonly( $t_bug_id ) )
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
       // access_ensure_bug_level( config_get( 'add_bugnote_threshold' ), $f_bug_id );
@@ -777,7 +779,7 @@ class ERP_mailbox_api
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
       // access_ensure_project_level( config_get('report_bug_threshold' ) );
-			$f_master_bug_id = ( ( $t_bug_id !== FALSE && bug_is_readonly( $t_bug_id ) ) ? $t_bug_id : 0 );
+			$f_master_bug_id = ( ($t_bug_id !== FALSE && (intval($t_bug_id) > 0 ) && bug_is_readonly( $t_bug_id ) ) ? $t_bug_id : 0 );
 			$this->fix_empty_fields( $p_email );
 
 			$t_bug_data = new BugData;
@@ -1172,9 +1174,9 @@ class ERP_mailbox_api
 	{
 	  $ret = array('bug_id' => FALSE, 'is_resolved' => FALSE);
 		$t_bug_id = $this->get_bug_id_from_subject( $p_mail_subject );
-		if ( $t_bug_id !== FALSE )
+		if ( $t_bug_id !== FALSE && intval($t_bug_id) > 0 )
 		{
-		  $bug = bug_cache_row($t_bug_id);
+		  $bug = bug_cache_row($t_bug_id,DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND);
 			if( $bug !== FALSE )
 			{
 			  $ret = array('bug_id' => $t_bug_id, 'is_resolved' => isset($this->resolvedStatusSet[$bug['status']]) );
