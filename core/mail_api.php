@@ -8,6 +8,16 @@
 # 
 # This page receives an E-Mail via POP3 or IMAP and generates an Report
 #
+# 20130121 - fman - improvements on email reply
+# 20130118 - fman - fixes issue after test
+# 20130117 - fman - improvement in architecture and configuration
+#                   in order to have several mail managers
+#
+#
+# 20130110 
+# add feature that allow reply with fixed text ONLY when issue is OPENED (new issue)
+#
+#
 # Changed to implement
 # 1. Special processing for Fusion Reactor mails
 # 2. Special processing for mails with TESI TAGS on mail body
@@ -15,6 +25,7 @@
 #    we are going to create a new one.
 #
 
+require_once( 'email_api.php' );   // 20130110
 require_once( 'bug_api.php' );
 require_once( 'bugnote_api.php' );
 require_once( 'user_api.php' );
@@ -29,6 +40,8 @@ require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Net/IMAP_1.0.3
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/config_api.php' );
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/Parser.php' );
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/simple_html_dom.php');
+
+define("DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND", false);
 
 class ERP_mailbox_api
 {
@@ -100,7 +113,6 @@ class ERP_mailbox_api
   public  $categoryCache;
   public  $resolvedStatusSet;
 
-  define("DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND", false);
 
 
 	# --------------------
@@ -159,7 +171,7 @@ class ERP_mailbox_api
 
 		$this->_max_file_size					= (int) min( ini_get_number( 'upload_max_filesize' ), ini_get_number( 'post_max_size' ), config_get( 'max_file_size' ) );
 
-		// Do we need to remporarily enable emails on self actions?
+		// Do we need to temporarily enable emails on self actions?
 		$t_mail_email_receive_own				= plugin_config_get( 'mail_email_receive_own' );
 		if ( $t_mail_email_receive_own )
 		{
@@ -368,13 +380,19 @@ class ERP_mailbox_api
 											}
 											else
 											{
-											  $op = $this->process_single_email($i, (int) $t_project[ 'id' ],(int)$t_project['mail_manager']);
+											  // $op = $this->process_single_email($i,(int)$t_project['id'],(int)$t_project['mail_manager']);
+											  $op = $this->process_single_email($i,$t_project);
 												$this->_mailserver->deleteMsg( $i );
                         $ufeed = array();
                         $ufeed[] = "\n (tesi) - START FEEDBACK - After process_single_mail()\n" ; 
                         $ufeed[] = "\n (tesi) - Mail Deleted FROM MAILBOX\n" ; 
                         $ufeed[] = "\n (tesi) - mail subject: " . $op['subject'] . "\n"; 
                         $ufeed[] = "\n (tesi) - ticket: " . $op['ticket'] . "\n"; 
+                        if($op['isResolved'])
+                        {
+                          $ufeed[] = "\n (tesi) - This ticket HITTED an existent AND RESOLVED ONE ";
+                          $ufeed[] = "\n (tesi) - For certain Projects this means A NEW TICKET WILL BE OPENED \n"; 
+                        } 
                         $ufeed[] = "\n (tesi) - END FEEDBACK\n"; 
                         foreach($ufeed as $m)
                         {
@@ -428,9 +446,23 @@ class ERP_mailbox_api
 	# Process a single email from either a pop3 or imap mailbox
   # TESI - $p_mail_manager
   #
-	private function process_single_email( $p_i, $p_overwrite_project_id = FALSE, $p_mail_manager = 0) 
-	{
-	  $ticket_id = null;
+	// private function process_single_email($p_i, $p_overwrite_project_id = FALSE, $p_mail_manager = 0) 
+	private function process_single_email($p_i, $p_project_info) 
+	{                                                     
+	  $p_overwrite_project_id = intval($p_project_info['id']);
+	  $p_is_mail_manager = $p_project_info['mail_manager'];
+	  
+      $replyToFromEmail = '';
+	  $addBugOp = null;
+      $retVal = array('ticket_created' => 0, 'subject' => '', 
+                      'ticket' => 0, 'isResolved' => 0, 'hit' => 0);
+
+    // 20130117
+    echo "\n (tesi) " . __METHOD__  . "\n";
+    echo "\n (tesi) \$p_overwrite_project_id: $p_overwrite_project_id \n";
+    echo "\n (tesi) \$p_is_mail_manager: $p_is_mail_manager \n";
+	  
+	  
 		$this->show_memory_usage( 'Start process single email' );
 		$t_msg = $this->_mailserver->getMsg( $p_i );
 		$this->save_message_to_file( $t_msg );
@@ -441,32 +473,44 @@ class ERP_mailbox_api
 		$this->save_message_to_file( $t_email );
 
 		// Only continue if we have a valid Reporter to work with
-		if ( $t_email[ 'Reporter_id' ] !== FALSE )
+		if ( $t_email['Reporter_id'] !== FALSE )
 		{
 			// We don't need to validate the email address if it is an existing user (existing user also needs to be set as the reporter of the issue)
-			if ( $t_email[ 'Reporter_id' ] !== $this->_mail_reporter_id || $this->validate_email_address( $t_email[ 'From_parsed' ][ 'email' ] ) )
+			if ( $t_email[ 'Reporter_id' ] !== $this->_mail_reporter_id || 
+			     $this->validate_email_address( $t_email[ 'From_parsed' ][ 'email' ] ) )
 			{
         // TESI
         // Analize Subject in order to understand if special logic (for Fusion Reactor)
         // needs to be applied.
         $my_project_id = -1;
-				foreach($this->mail_tags as $needle => $pdata)
-				{
-					if(strpos($t_email['Subject'],$needle) !== FALSE)
-					{
-						$my_project_id = $pdata['id'];
-						break;						
-					}
+        $mmpid = $p_is_mail_manager ? $p_project_info['id'] : 0;
+        echo "\n (tesi) " . __LINE__ . "\$mmpid: $mmpid \n";
+        if( $mmpid > 0 )
+        {
+  				foreach($this->mail_tags[$mmpid] as $needle => $pdata)
+  				{
+  					if(strpos($t_email['Subject'],$needle) !== FALSE)
+  					{
+  						$my_project_id = $pdata['id'];
+  						
+  						// 20130121
+  						$replyToFromEmail = str_replace(array('[', ']'), '', $needle));  
+              			$replyToFromEmail .= '@gruppotesi.com';
+  						break;
+  					}
+  				}
 				}
-				
+        echo "\n (tesi) " . __LINE__ . "\$my_project_id: $my_project_id \n";
+        
 				// TESI                  
 				// This logic allow EXCLUSION of mails based on SUBJECT
 				//
-				$doAdd = ($my_project_id > 0 || ($my_project_id < 0 && $p_mail_manager == 0));
+				$doAdd = ($my_project_id > 0 || ($my_project_id < 0 && $p_is_mail_manager == 0));
 				echo "\n line:" . __LINE__ . " - (tesi) - doAdd {$doAdd} - SUBJECT: " . $t_email['Subject'] . "\n";
-				if($doAdd && !is_null($this->mail_tags_exclude[$my_project_id])) 
+				if($doAdd && isset($this->mail_tags_exclude[$mmpid]) && 
+				   !is_null($this->mail_tags_exclude[$mmpid][$my_project_id])) 
 				{
-					foreach($this->mail_tags_exclude[$my_project_id] as $martian )
+					foreach($this->mail_tags_exclude[$mmpid][$my_project_id] as $martian )
 					{
 						if(strpos($t_email['Subject'],$martian['needle']) !== FALSE)
 						{
@@ -480,8 +524,13 @@ class ERP_mailbox_api
 				// TESI
 				if($doAdd)
 				{  
+          $target_project_id = ($my_project_id > 0 ? $my_project_id :$p_overwrite_project_id);
+          $tpinfo = project_cache_row($target_project_id, false );
+         
           echo "\n (tesi) - READY TO DO PROCESSING TO UNDERSTAND IF BUG CAN BE REALLY ADDED";
-					$ticket_id = $this->add_bug( $t_email, ($my_project_id > 0 ? $my_project_id :$p_overwrite_project_id) );
+          echo "\n (tesi) - Target Mantis Project:{$target_project_id} - {$tpinfo['name']}";
+					$addBugOp = $this->add_bug($t_email,$target_project_id,$p_project_info,$replyToFromEmail); 
+
 				}	
 			}
 			else
@@ -492,8 +541,15 @@ class ERP_mailbox_api
 
 		$this->show_memory_usage( 'Finished process single email' );
 
-    return array('ticket_created' => $doAdd, 'subject' => $t_email['Subject'], 'ticket:' => $ticket_id);
-    
+    $retVal['ticket_created'] = $doAdd;
+    $retVal['subject'] = $t_email['Subject'];
+    if( !is_null($addBugOp) )
+    {
+      $retVal['ticket'] = $addBugOp->bugID;
+      $retVal['isResolved'] = $addBugOp->isResolved;
+      $retVal['hit'] = $addBugOp->bugIDHit;
+    }
+    return $retVal;
 	}
 
 	# --------------------
@@ -652,9 +708,18 @@ class ERP_mailbox_api
 	# Taken from bug_report.php in MantisBT 1.2.0
   # Changed by TESI
   # 20121220 - will try to check issue status, if Resolved or Closed => DO NOTHING
-	private function add_bug( &$p_email, $p_overwrite_project_id = FALSE )
+	private function add_bug(&$p_email,$p_overwrite_project_id = FALSE, $p_project_info,$p_replyToFromEmail = '')
 	{
+	  $ret = new stdClass();
+	  $ret->isResolved = 0;
+	  $ret->bugID = 0;
+	  $ret->bugIDHit = 0;
+	  
+	  $p_mmpid = $p_project_info['mail_manager'] ? $p_project_info['id'] : 0;
+	  $sender = $p_email['From_parsed']['email'];  // 20130110
+	  $original_subject = $p_email['Subject'];  // 20130110
 		$this->show_memory_usage( 'Start add bug' );
+
 
     // TESI
 		$t_project_id = ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id;
@@ -676,53 +741,69 @@ class ERP_mailbox_api
 
 		list($p_email['Subject'],$p_email['FusionReactor']) = $this->build_subject($p_email,$t_project_id);
 
-    $is_resolved = FALSE;
     if ( $this->_mail_add_bugnotes )
     {
       // check if BUGID is present on subject.
       // do not think for Tesi we are going to follow this path
+      // IDEA CHANGED!!!
+      echo "\n (tesi) Standard process to understand (using ticke number on subject) ";
+      echo "\n (tesi) " . $p_email['Subject'];
+      
       $op = $this->mail_is_a_bugnote($p_email[ 'Subject' ]);
-      $t_bug_id = $op['bug_id'];
-      $is_resolved = $op['is_resolved'];
+      var_dump($op);
+      
+      $ret->bugID = $ret->bugIDHit = $op['bug_id'];
+      $ret->isResolved = $op['is_resolved'];
     }
     else
     {
-      $t_bug_id = FALSE;
+      $ret->bugID = $ret->bugIDHit = FALSE;
     }
 
     // TESI
-    if($t_bug_id === false)
+    // For some projects like this regarding application monitoring
+    // the choice is to use subject as access key.
+    //
+    // For projects that we plan to use to manage customer requests
+    // we do not want to use this kind of logic.
+    //
+    if($ret->bugID === false && $p_project_info['mail_get_by_context'])
     {
-      $t_bug_id = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
-      $add_as_note = intval($t_bug_id) > 0 ? TRUE : FALSE;
-      echo '(tesi) DEBUG WILL ADD AS NOTE? ' . intval($t_bug_id);
+      $ret->bugID = $this->mail_get_by_context($p_email['Subject'],$t_project_id );
+      $add_as_note = intval($ret->bugID) > 0 ? TRUE : FALSE;
+      echo "\n (tesi) DEBUG WILL ADD AS NOTE ? " . ($add_as_note ? 'Yes' : 'No');
       
       if($add_as_note)
       {
+        $ret->bugIDHit = $ret->bugID ;
         // Because we are working without GUI, do not want trigger error
-        $fman_bug = bug_cache_row($t_bug_id,DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND);
+        $fman_bug = bug_cache_row($ret->bugID,DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND);
         if( $fman_bug !== FALSE )
         {
-          $is_resolved = isset($this->resolvedStatusSet[$fman_bug['status']]);
+          $ret->isResolved = isset($this->resolvedStatusSet[$fman_bug['status']]);
         }
+        echo "\n (tesi) Target Bug ID: $ret->bugIDHit - Hmmm, is resolved? " . ($ret->isResolved ? 'Yes' : 'No');
       }
     }
 
 		// TESI - 20121220
-    if( $is_resolved )
+    if( $ret->isResolved )
     {
-      // Bye
-      // echo "\n (tesi) We are trying to act on a TICKET {$t_bug_id} that is resolved - SKIP\n";
-      // return $t_bug_id;
-      // 20121221
       // This way I'm going to force creation of new bug
       $add_as_note = FALSE;
-      $t_bug_id = FALSE;
+      $ret->bugIDHit = $ret->bugID;
     }
 
 		// TESI
-		if($add_as_note === FALSE && $t_bug_id !== FALSE && intval($t_bug_id) >0 && !bug_is_readonly( $t_bug_id ) )
+		echo "\n (tesi) add_as_note:" . ($add_as_note ? 1 : 0);
+		$t_bug_id_can_be_used = !$is_resolved &&
+		                        ($ret->bugID !== FALSE && intval($ret->bugID) > 0 && !bug_is_readonly($ret->bugID));
+		
+		if($add_as_note === FALSE && $t_bug_id_can_be_used)
 		{
+		  echo "\n (tesi) " . __LINE__ . " - Original Plugin ADD NOTE Management ";
+		  echo "\n (tesi) Issue Exists and IS NOT READ ONLY ";
+		  
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
       // access_ensure_bug_level( config_get( 'add_bugnote_threshold' ), $f_bug_id );
 
@@ -733,45 +814,47 @@ class ERP_mailbox_api
 
 			# Event integration
 			# Core mantis event already exists within bignote_add function
-			$t_bugnote_text = event_signal( 'EVENT_ERP_BUGNOTE_DATA', $t_description, $t_bug_id );
-			$t_status = bug_get_field( $t_bug_id, 'status' );
+			$t_bugnote_text = event_signal( 'EVENT_ERP_BUGNOTE_DATA', $t_description,$ret->bugID);
+			$t_status = bug_get_field($ret->bugID, 'status' );
 			if ( $this->_bug_resolved_status_threshold <= $t_status )
 			{
 				# Reopen issue and add a bug note
-				bug_reopen( $t_bug_id, $t_description );
+				bug_reopen($ret->bugID, $t_description);
 			}
 			elseif ( !is_blank( $t_description ) )
 			{
 				# Add a bug note
-				bugnote_add( $t_bug_id, $t_description );
+				bugnote_add($ret->bugID, $t_description);
 			}
 		}
-		elseif ($add_as_note === TRUE && $t_bug_id !== FALSE && !bug_is_readonly( $t_bug_id ) )
+		elseif ($add_as_note === TRUE && $t_bug_id_can_be_used )
 		{
 			// TESI
 			//echo '$this->mail_substr'; var_dump($this->mail_substr);
 			//echo '$this->mail_substr[' . $t_project_id . ']'; var_dump($this->mail_substr[$t_project_id]);
+		  echo "\n (tesi) " . __LINE__ . " - TESI ADD NOTE Management ";
 
 			// if we have another string to search on subject we apply special process.
 			$doStandard = true;
-			if( isset($this->mail_substr[$t_project_id]) )
+			if( isset($this->mail_substr[$p_mmpid][$t_project_id]) )
 			{
 				$msg2write = $this->apply_mail_save_from($p_email['From'],$p_email['X-Mantis-Body']);
 				list($doStandard,$dummy,$saveAsAttach) = $this->process_substr($p_email['Subject'],$p_email['FusionReactor'],
-															                                         $msg2write,$this->mail_substr[$t_project_id]);
+															                                         $msg2write,
+															                                         $this->mail_substr[$p_mmpid][$t_project_id]);
 			}
 			
 			if( $doStandard )
 			{
 				$dummy = $this->apply_mail_save_from($p_email['From'], $p_email['dateAsString']);
 			}
-			bugnote_add($t_bug_id, $dummy);
+			bugnote_add($ret->bugID, $dummy);
 		
 			if($saveAsAttach)  // francisco 20121113
 			{
-			  if( !is_null($msg = $this->bruteForceAddFile($t_bug_id,$msg2write) ) )
+			  if( !is_null($msg = $this->bruteForceAddFile($ret->bugID,$msg2write) ) )
 			  {
-			    bugnote_add($t_bug_id, 'Error Attaching:' . $msg );
+			    bugnote_add($ret->bugID, 'Error Attaching:' . $msg );
 			  }
    		} 
 		}
@@ -779,7 +862,8 @@ class ERP_mailbox_api
 		{
 			// @TODO@ Disabled for now until we find a good solution on how to handle the reporters possible lack of access permissions
       // access_ensure_project_level( config_get('report_bug_threshold' ) );
-			$f_master_bug_id = ( ($t_bug_id !== FALSE && (intval($t_bug_id) > 0 ) && bug_is_readonly( $t_bug_id ) ) ? $t_bug_id : 0 );
+			$f_master_bug_id = ( ($ret->bugID !== FALSE && (intval($ret->bugID) > 0 ) && bug_is_readonly($ret->bugID)) 
+			                   ? $ret->bugID : 0 );
 			$this->fix_empty_fields( $p_email );
 
 			$t_bug_data = new BugData;
@@ -799,9 +883,9 @@ class ERP_mailbox_api
 			$t_bug_data->reproducibility		= $this->_default_bug_reproducibility;
 			$t_bug_data->severity				= $this->_default_bug_severity;
 			$t_bug_data->priority				= $p_email[ 'Priority' ];
-			$t_bug_data->projection				= $this->_default_bug_projection;
-			$t_bug_data->eta					= $this->_default_bug_eta;
-			$t_bug_data->resolution				= $this->_default_bug_resolution;
+			$t_bug_data->projection			= $this->_default_bug_projection;
+			$t_bug_data->eta					  = $this->_default_bug_eta;
+			$t_bug_data->resolution			= $this->_default_bug_resolution;
 			$t_bug_data->status					= $this->_bug_submit_status;
 			$t_bug_data->summary				= $p_email[ 'Subject' ];
 
@@ -809,21 +893,19 @@ class ERP_mailbox_api
 			// TESI
 			// if we have another string to search on subject we apply special process.
 			$t_bug_data->description = $mgs2write = $this->apply_mail_save_from($p_email['From'], $p_email['X-Mantis-Body']);
-			if( isset($this->mail_substr[$t_project_id]) )
+			if( isset($this->mail_substr[$p_mmpid][$t_project_id]) )
 			{
 				list($doStandard,$t_bug_data->description,$saveAsAttach) = $this->process_substr($t_bug_data->summary,
 		                                                                       $p_email['FusionReactor'],
 																				                                   $mgs2write,	
-																				                                   $this->mail_substr[$t_project_id]);
+																				                                   $this->mail_substr[$p_mmpid][$t_project_id]);
 			}
 
 			$t_bug_data->steps_to_reproduce		= $this->_default_bug_steps_to_reproduce;
 			$t_bug_data->additional_information	= $this->_default_bug_additional_info;
 			$t_bug_data->due_date				= date_get_null();
 
-			// $t_bug_data->project_id				= ( ( $p_overwrite_project_id === FALSE ) ? $this->_mailbox[ 'project_id' ] : $p_overwrite_project_id );
       $t_bug_data->project_id = $t_project_id;  // TESI
-
 			$t_bug_data->reporter_id			= $p_email[ 'Reporter_id' ];
 
   		# Allow plugins to pre-process bug data
@@ -831,7 +913,7 @@ class ERP_mailbox_api
 			$t_bug_data = event_signal( 'EVENT_ERP_REPORT_BUG_DATA', $t_bug_data );
 
 			# Create the bug
-			$t_bug_id = $t_bug_data->create();
+			$ret->bugID = $t_bug_data->create();
 
             // TESI
 			// now add custom fields
@@ -844,7 +926,7 @@ class ERP_mailbox_api
 					// var_dump($cfname);
 					// var_dump($cfdata);
 					$val4db = custom_field_value_to_database($cfdata,$this->cfCacheByName[$cfname]['type']);
-					custom_field_set_value($this->cfCacheByName[$cfname]['id'],$t_bug_id, $val4db);
+					custom_field_set_value($this->cfCacheByName[$cfname]['id'],$ret->bugID, $val4db);
 				}
 			}
 
@@ -858,41 +940,67 @@ class ERP_mailbox_api
 				bug_update_date( $f_master_bug_id );
 
 				# Add the relationship
-				relationship_add( $t_bug_id, $f_master_bug_id, $f_rel_type );
+				relationship_add($ret->bugID, $f_master_bug_id, $f_rel_type );
 
 				# Add log line to the history (both issues)
-				history_log_event_special( $f_master_bug_id, BUG_ADD_RELATIONSHIP, relationship_get_complementary_type( $f_rel_type ), $t_bug_id );
-				history_log_event_special( $t_bug_id, BUG_ADD_RELATIONSHIP, $f_rel_type, $f_master_bug_id );
+				history_log_event_special($f_master_bug_id, BUG_ADD_RELATIONSHIP, 
+				                          relationship_get_complementary_type( $f_rel_type ), $ret->bugID );
+				history_log_event_special($ret->bugID, BUG_ADD_RELATIONSHIP, $f_rel_type, $f_master_bug_id);
 
 				# Send the email notification
-				email_relationship_added( $f_master_bug_id, $t_bug_id, relationship_get_complementary_type( $f_rel_type ) );
+				email_relationship_added( $f_master_bug_id,$ret->bugID, relationship_get_complementary_type( $f_rel_type ) );
 			}
 
-			helper_call_custom_function( 'issue_create_notify', array( $t_bug_id ) );
+			helper_call_custom_function( 'issue_create_notify', array($ret->bugID) );
 
 			# Allow plugins to post-process bug data with the new bug ID
-			event_signal( 'EVENT_REPORT_BUG', array( $t_bug_data, $t_bug_id ) );
-
-			email_new_bug( $t_bug_id );
+			event_signal( 'EVENT_REPORT_BUG', array( $t_bug_data, $ret->bugID) );
+			email_new_bug($ret->bugID);
 
 			// TESI
 			if($saveAsAttach)
 			{
-			  if( !is_null($msg = $this->bruteForceAddFile($t_bug_id,$mgs2write)))
+			  if( !is_null($msg = $this->bruteForceAddFile($ret->bugID,$mgs2write)))
 			  {
-			    bugnote_add($t_bug_id, 'Error Attaching:' . $msg );
+			    bugnote_add($ret->bugID, 'Error Attaching:' . $msg );
 			  }
 			} 
+      
+      // TESI - 2013010 - send fixed mail.
+      // $sender
+      // 
+      $target_project = project_cache_row( $t_project_id, false );
+      if( isset($target_project['mail_reply_to_enabled']) && $target_project['mail_reply_to_enabled'] )
+      {
+        $reply_to = $sender;
+        if( isset($target_project['mail_reply_to']) && strlen(trim($target_project['mail_reply_to'])) > 0)
+        {
+          $reply_to = $target_project['mail_reply_to'];
+        } 
+
+        if( isset($target_project['mail_reply_to_cc']) && strlen(trim($target_project['mail_reply_to_cc'])) > 0)
+        {
+          $reply_to .= $target_project['mail_reply_to_cc'];
+        } 
+
+
+        // build new subject 
+        // Copied from email_bug_info_to_one_user()
+        $t_subject = '[' . $target_project['name'] . ' ' . bug_format_id($ret->bugID) . ']: ' . $t_bug_data->summary;
+        $t_contents = sprintf($target_project['mail_reply_body'],$ret->bugID,$ret->bugID,$ret->bugID,$ret->bugID);
+        $t_ok = email_store($reply_to, $t_subject, $t_contents,null,$p_replyToFromEmail);
+      }
       
 		}
 		else
 		{
 			// Not allowed to add bugs and not allowed / able to add bugnote. Need to stop processing
 			$this->custom_error( 'Not allowed to create a new issue. Email ignored' );
-			return $t_bug_id;
+			return $ret;
 		}
 
-		$this->custom_error( 'Reporter: ' . $p_email[ 'Reporter_id' ] . ' - ' . $p_email[ 'From_parsed' ][ 'email' ] . ' --> Issue ID: #' . $t_bug_id );
+		$this->custom_error('Reporter: ' . $p_email[ 'Reporter_id' ] . ' - ' . 
+		                    $p_email[ 'From_parsed' ][ 'email' ] . ' --> Issue ID: #' . $ret->bugID );
 		$this->show_memory_usage( 'Start processing attachments' );
 
 		# Add files
@@ -904,7 +1012,7 @@ class ERP_mailbox_api
 
 				foreach ( $p_email[ 'X-Mantis-Parts' ] as $part )
 				{
-					$t_file_rejected = $this->add_file( $t_bug_id, $part );
+					$t_file_rejected = $this->add_file($ret->bugID, $part );
 
 					if ( $t_file_rejected !== TRUE )
 					{
@@ -920,17 +1028,18 @@ class ERP_mailbox_api
 						'body' => 'List of rejected files' . "\n\n" . $t_rejected_files,
 					);
 
-					$t_reject_rejected_files = $this->add_file( $t_bug_id, $part );
+					$t_reject_rejected_files = $this->add_file($ret->bugID, $part );
 					if ( $t_reject_rejected_files !== TRUE )
 					{
 						$part[ 'body' ] .= $t_reject_rejected_files;
-						$this->custom_error( 'Failed to add "' . $part[ 'name' ] . '" to the issue. See below for all errors.' . "\n" . $part[ 'body' ] );
+						$this->custom_error( 'Failed to add "' . $part[ 'name' ] .
+						 '" to the issue. See below for all errors.' . "\n" . $part[ 'body' ] );
 					}
 				}
 			}
 		}
 		
-		return $t_bug_id;
+		return $ret;
 	}
 
 	# --------------------
@@ -1174,6 +1283,8 @@ class ERP_mailbox_api
 	{
 	  $ret = array('bug_id' => FALSE, 'is_resolved' => FALSE);
 		$t_bug_id = $this->get_bug_id_from_subject( $p_mail_subject );
+		
+		
 		if ( $t_bug_id !== FALSE && intval($t_bug_id) > 0 )
 		{
 		  $bug = bug_cache_row($t_bug_id,DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND);
@@ -1241,6 +1352,15 @@ class ERP_mailbox_api
   
 	# --------------------
 	# return the bug's id from the subject
+  # The original regular expression 
+  # "/\[.*?\s([0-9]{1,7}?)\]/u"
+  #
+  # Search inside [] the number but need an space before the Number
+  #
+  # Examples
+  # OK: Test ONE 20130121 - 03 [ 0056631] => get bug id 0056631
+  # KO: Test ONE 20130121 - 03 [#0056631] => DO NOT GET BUG ID
+  # KO: Test ONE 20130121 - 03 [TICKET:0056631] => DO NOT GET BUG ID
 	private function get_bug_id_from_subject( $p_mail_subject )
 	{
 		preg_match( "/\[.*?\s([0-9]{1,7}?)\]/u", $p_mail_subject, $v_matches );
@@ -1452,15 +1572,18 @@ class ERP_mailbox_api
       $nt = $t_email['Subject'];
       if( strpos($nt,'[mon_') !== FALSE )
       {
-        echo "(tesi) Trying TO CUT \n";
         // will cut, looking for first ' - '
         $cut_point = ' - ';
         $cut_len = strlen($cut_point);
+        echo "\n(tesi) Trying TO CUT on cut_point *{$cut_point}*";
+        echo "\n(tesi) Trying TO CUT STRING {$nt}";
         if( ($start = strpos($nt,$cut_point)) !== FALSE )
         {
           $end = strlen($nt) - $start - $cut_len;
           $nt = substr($nt,$start + $cut_len, $end);
-          echo '(tesi) **** new subject:' . $xnt . "\n";
+          echo "\n(tesi) Start Point: " . ($start + $cut_len) . "\n";
+          echo "\n(tesi) END Point: " . $end . "\n";
+          echo "\n(tesi) **** new subject (AFTER CUT):" . $nt . "\n";
         }
       }
     }

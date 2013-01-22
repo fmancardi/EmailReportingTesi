@@ -1,0 +1,1 @@
+ALTER TABLE mantis_email_table ADD COLUMN from_email VARCHAR(64) NULL  AFTER submitted;
