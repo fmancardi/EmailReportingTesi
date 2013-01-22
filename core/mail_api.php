@@ -42,6 +42,7 @@ require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/Parser.ph
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/simple_html_dom.php');
 
 define("DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND", false);
+define("BUGCOUNT_LIMIT_TO_OPEN_NEW", 10);
 
 class ERP_mailbox_api
 {
@@ -781,6 +782,32 @@ class ERP_mailbox_api
         if( $fman_bug !== FALSE )
         {
           $ret->isResolved = isset($this->resolvedStatusSet[$fman_bug['status']]);
+                           
+                           
+          if(!$ret->isResolved)
+          {
+            // Want to add new bug if notes count is too high, because this creates
+            // fatal error when trying to insert mail on mail table.
+            // MySQL complains with max packate size exceeded 
+            $c_bug_id = db_prepare_int($ret->bugID);
+            $t_bugnote_table = db_get_table( 'mantis_bugnote_table' );
+            $query = "SELECT bugnote_text_id FROM $t_bugnote_table WHERE bug_id=" . db_param();
+            $result = db_query_bound( $query, array($c_bug_id) );
+            $bugnote_count = db_num_rows($result);
+            echo "\n (tesi) \$bugnote_count:$bugnote_count";
+            if( $bugnote_count > BUGCOUNT_LIMIT_TO_OPEN_NEW )
+            {
+              // Set original issue as Resolved
+              // Open a New ONE
+              // 
+              // bug_resolve($ret->bugID, OPEN, $p_status = null, 
+              //             $p_fixed_in_version = '', $p_duplicate_id = null, 
+              //             $p_handler_id = null, $p_bugnote_text = '', 
+              //             $p_bugnote_private = false, $p_time_tracking = '0:00' );
+              $p_bugnote_text = " Troppe note (limite=" . BUGCOUNT_LIMIT_TO_OPEN_NEW . ")- Chiusa in automatico ";
+              bug_resolve($ret->bugID, OPEN,null,'',null,null, $p_bugnote_text);
+            }
+          }
         }
         echo "\n (tesi) Target Bug ID: $ret->bugIDHit - Hmmm, is resolved? " . ($ret->isResolved ? 'Yes' : 'No');
       }
