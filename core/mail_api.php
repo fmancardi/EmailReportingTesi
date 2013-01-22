@@ -495,8 +495,8 @@ class ERP_mailbox_api
   						$my_project_id = $pdata['id'];
   						
   						// 20130121
-  						$replyToFromEmail = str_replace(array('[', ']'), '', $needle));  
-              			$replyToFromEmail .= '@gruppotesi.com';
+  						$replyToFromEmail = str_replace(array('[', ']'), '', $needle);  
+              $replyToFromEmail .= '@gruppotesi.com';
   						break;
   					}
   				}
