@@ -455,7 +455,7 @@ class ERP_mailbox_api
 	  
 	  // this is useful for projects that are not managed by a Mail Manager
     $dummy = trim($p_project_info['mail_from_email']);
-    $replyToFromEmail = ($dummy != '' ? $dummy : '';
+    $replyToFromEmail = $dummy != '' ? $dummy : '';
     
 	  $addBugOp = null;
     $retVal = array('ticket_created' => 0, 'subject' => '', 
