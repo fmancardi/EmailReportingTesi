@@ -786,14 +786,17 @@ function email_bug_deleted( $p_bug_id ) {
  * @param string $p_subject
  * @param string $p_message
  * @param array $p_headers
+ * @param string $p_from_email    // TESI
+ * @param string $p_in_cc         // TESI 
  * @return int
  */
-function email_store( $p_recipient, $p_subject, $p_message, $p_headers = null, $p_from_email = null ) {
+function email_store( $p_recipient, $p_subject, $p_message, $p_headers = null, $p_from_email = null,$p_in_cc = null ) {
 	$t_recipient = trim( $p_recipient );
 	$t_subject = string_email( trim( $p_subject ) );
 	$t_message = string_email_links( trim( $p_message ) );
 
 	$t_from_email = trim($p_from_email); // 20130122 - francisco.mancardi
+	$t_in_cc_email = trim($p_in_cc); // 20130131 - francisco.mancardi
 
 	# short-circuit if no recipient is defined, or email disabled
 	# note that this may cause signup messages not to be sent
@@ -807,7 +810,8 @@ function email_store( $p_recipient, $p_subject, $p_message, $p_headers = null, $
 	$t_email_data->email = $t_recipient;
 	$t_email_data->subject = $t_subject;
 	$t_email_data->body = $t_message;
-  $t_email_data->from_email = $t_from_email;  // 20130122 - francisco.mancardi
+    $t_email_data->from_email = $t_from_email;  // 20130122 - francisco.mancardi
+    $t_email_data->in_cc = $t_in_cc_email;  // 20130131 - francisco.mancardi
 
 	$t_email_data->metadata = array();
 	$t_email_data->metadata['headers'] = $p_headers === null ? array() : $p_headers;
@@ -829,7 +833,8 @@ function email_store( $p_recipient, $p_subject, $p_message, $p_headers = null, $
 	$t_email_data->metadata['hostname'] = $t_hostname;
 
 
-	echo "\n BEFORE QUEUE ADD:" . $t_email_data->from_email;	
+	// echo "\n BEFORE QUEUE ADD:" . $t_email_data->from_email;	
+	//echo "\n BEFORE QUEUE ADD:" . $t_email_data->in_cc;	
 	$t_email_id = email_queue_add( $t_email_data );
 
 	return $t_email_id;
@@ -885,6 +890,7 @@ function email_send( $p_email_data ) {
 	$t_recipient = trim( $t_email_data->email );
 	$t_subject = string_email( trim( $t_email_data->subject ) );
 	$t_message = string_email_links( trim( $t_email_data->body ) );
+	$t_in_cc = trim($t_email_data->in_cc);  // 20130131 - TESI
 
 
 	$t_debug_email = config_get( 'debug_email' );
@@ -981,8 +987,29 @@ function email_send( $p_email_data ) {
 		}
 	} else {
 		try {
-			$mail->AddAddress( $t_recipient, '' );
-		} catch ( phpmailerException $e ) {
+
+		   // 20130124
+           // we will use , as separator, but will replace ; with it
+           $t_recipient = str_replace(";", ",", $t_recipient);                   
+           $dummy = explode(',',$t_recipient);
+           foreach($dummy as $t_recipient)
+           {
+			 $mail->AddAddress( $t_recipient, '' );
+		   } 
+ 		   
+           // 20130131
+           // TESI - manage CC as a list
+           $t_in_cc = str_replace(";", ",", $t_in_cc);                   
+           if($t_in_cc !='')
+           {
+              $dummy = explode(',',$t_in_cc);
+              foreach($dummy as $t_in_cc)
+              {
+			    $mail->AddCC($t_in_cc, '' );
+              }	
+           } 
+
+      } catch ( phpmailerException $e ) {
 			$t_success = false;
 			$mail->ClearAllRecipients();
 			$mail->ClearAttachments();

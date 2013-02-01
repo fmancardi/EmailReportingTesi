@@ -453,10 +453,13 @@ class ERP_mailbox_api
 	  $p_overwrite_project_id = intval($p_project_info['id']);
 	  $p_is_mail_manager = $p_project_info['mail_manager'];
 	  
-      $replyToFromEmail = '';
+	  // this is useful for projects that are not managed by a Mail Manager
+    $dummy = trim($p_project_info['mail_from_email']);
+    $replyToFromEmail = ($dummy != '' ? $dummy : '';
+    
 	  $addBugOp = null;
-      $retVal = array('ticket_created' => 0, 'subject' => '', 
-                      'ticket' => 0, 'isResolved' => 0, 'hit' => 0);
+    $retVal = array('ticket_created' => 0, 'subject' => '', 
+                    'ticket' => 0, 'isResolved' => 0, 'hit' => 0);
 
     // 20130117
     echo "\n (tesi) " . __METHOD__  . "\n";
@@ -483,20 +486,23 @@ class ERP_mailbox_api
         // TESI
         // Analize Subject in order to understand if special logic (for Fusion Reactor)
         // needs to be applied.
+        // TESI - used to generate mail subject, for automatic reply
+        // when a new ticket is created.
+        $str2removefromsubject = null;
         $my_project_id = -1;
         $mmpid = $p_is_mail_manager ? $p_project_info['id'] : 0;
         echo "\n (tesi) " . __LINE__ . "\$mmpid: $mmpid \n";
         if( $mmpid > 0 )
         {
+  			  // This is for project that are managed by another project
   				foreach($this->mail_tags[$mmpid] as $needle => $pdata)
   				{
   					if(strpos($t_email['Subject'],$needle) !== FALSE)
   					{
+						$str2removefromsubject = $needle;
   						$my_project_id = $pdata['id'];
-  						
-  						// 20130121
   						$replyToFromEmail = str_replace(array('[', ']'), '', $needle);  
-              $replyToFromEmail .= '@gruppotesi.com';
+              			$replyToFromEmail .= '@gruppotesi.com';
   						break;
   					}
   				}
@@ -530,7 +536,7 @@ class ERP_mailbox_api
          
           echo "\n (tesi) - READY TO DO PROCESSING TO UNDERSTAND IF BUG CAN BE REALLY ADDED";
           echo "\n (tesi) - Target Mantis Project:{$target_project_id} - {$tpinfo['name']}";
-					$addBugOp = $this->add_bug($t_email,$target_project_id,$p_project_info,$replyToFromEmail); 
+       	  $addBugOp = $this->add_bug($t_email,$target_project_id,$p_project_info,$replyToFromEmail,$str2removefromsubject); 
 
 				}	
 			}
@@ -582,8 +588,32 @@ class ERP_mailbox_api
 		$t_email[ 'X-Mantis-Parts' ] = $t_mp->parts();
 
 		$t_email[ 'dateAsString' ] = $t_mp->getDateAsString();  // TESI    
-    
-		if ( $this->_mail_use_bug_priority )
+
+        // TESI - added CC management - BEGIN
+        // cc - Carbon Copy can be a LIST        
+		$kuz = null;
+        $xdummy = str_replace(';',',',$t_mp->getCarbonCopy());  
+        if( $xdummy != '')
+        {
+        	$yummy = explode(',',$xdummy);  
+            foreach($yummy as $addr)
+            {
+				// parse address is needed to
+                // separate name from email
+                // example:
+                // Harry Hole <hhole@interpol.com>
+                // on email member we will get: hhole@interpol.com
+		    	$bb = $this->parse_address($addr);  // TESI    
+		    	$iz[] = $bb['email'];  // TESI    
+            }                
+            // convert BACK in a LIST            
+			$kuz = implode(',',$iz);
+            
+        }
+		$t_email['carbonCopy' ] = $kuz;
+        // TESI - added CC management - End
+		
+        if ( $this->_mail_use_bug_priority )
 		{
 			$t_priority = strtolower( $t_mp->priority() );
 			$t_email[ 'Priority' ] = $this->_mail_bug_priority[ $t_priority ];
@@ -709,7 +739,8 @@ class ERP_mailbox_api
 	# Taken from bug_report.php in MantisBT 1.2.0
   # Changed by TESI
   # 20121220 - will try to check issue status, if Resolved or Closed => DO NOTHING
-	private function add_bug(&$p_email,$p_overwrite_project_id = FALSE, $p_project_info,$p_replyToFromEmail = '')
+	private function add_bug(&$p_email,$p_overwrite_project_id = FALSE, $p_project_info,
+                                 $p_replyToFromEmail = '', $str2remove = null)
 	{
 	  $ret = new stdClass();
 	  $ret->isResolved = 0;
@@ -719,7 +750,8 @@ class ERP_mailbox_api
 	  $p_mmpid = $p_project_info['mail_manager'] ? $p_project_info['id'] : 0;
 	  $sender = $p_email['From_parsed']['email'];  // 20130110
 	  $original_subject = $p_email['Subject'];  // 20130110
-		$this->show_memory_usage( 'Start add bug' );
+	  $original_cc = $p_email['carbonCopy'];  // 20130131
+	  $this->show_memory_usage( 'Start add bug' );
 
 
     // TESI
@@ -1007,15 +1039,31 @@ class ERP_mailbox_api
 
         if( isset($target_project['mail_reply_to_cc']) && strlen(trim($target_project['mail_reply_to_cc'])) > 0)
         {
-          $reply_to .= $target_project['mail_reply_to_cc'];
+          $reply_to .= "," . $target_project['mail_reply_to_cc'];
         } 
+        echo "\n (tesi) REPLY TO BEFORE EMAIL STORE:" . $reply_to;
+
+        $in_cc = '';
+        if( isset($target_project['use_received_cc']) &&  $target_project['use_received_cc'])  
+        {
+          $in_cc =  $original_cc;
+        }
+
+        $add2sub = $t_bug_data->summary;
+        echo "\n (tesi) STR 2 REMOVE:" . $str2remove;
+        if(!is_null($str2remove))
+        {
+  	  	  $add2sub = str_replace($str2remove, '', $t_bug_data->summary);  
+          echo "\n (tesi) \$add2sub:" . $add2sub;
+        }
 
 
         // build new subject 
         // Copied from email_bug_info_to_one_user()
         $t_subject = '[' . $target_project['name'] . ' ' . bug_format_id($ret->bugID) . ']: ' . $t_bug_data->summary;
         $t_contents = sprintf($target_project['mail_reply_body'],$ret->bugID,$ret->bugID,$ret->bugID,$ret->bugID);
-        $t_ok = email_store($reply_to, $t_subject, $t_contents,null,$p_replyToFromEmail);
+        // $t_ok = email_store($reply_to, $t_subject, $t_contents,null,$p_replyToFromEmail);
+        $t_ok = email_store($reply_to, $t_subject, $t_contents,null,$p_replyToFromEmail,$in_cc);
       }
       
 		}
@@ -1077,11 +1125,26 @@ class ERP_mailbox_api
 		# Handle the file upload
 		$t_part_name = ( ( isset( $p_part[ 'name' ] ) ) ? trim( $p_part[ 'name' ] ) : NULL );
 		$t_strlen_body = strlen( trim( $p_part[ 'body' ] ) );
+        // echo "\n (tesi) T_PART_NAME:" . $t_part_name;
 
-		if ( is_blank( $t_part_name ) )
+		if ( is_blank( $t_part_name ) || $t_part_name == 'graycol.gif')
 		{
-			$t_part_name = md5( microtime() ) . '.erp';
+          return true;
+		  // $t_part_name = md5( microtime() ) . '.erp';
 		}
+        // To exclude images present in signature
+        // not really a good method, but for our needs is OK
+                $dummy = explode('.',$t_part_name);
+                $name_no_ext = $dummy[0]; 
+                // custom checks
+                // start with a number
+                $cf = substr($name_no_ext,0,1);   
+                if(ctype_digit($cf) && strlen($name_no_ext) == 8)
+                { 
+                  // discard
+                  return true;    
+                }
+
 
 		if ( !file_type_check( $t_part_name ) )
 		{

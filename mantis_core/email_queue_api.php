@@ -39,7 +39,9 @@ class EmailData {
   var $email = '';
   var $subject = '';
   var $body = '';
-  var $from_email = '';  // francisco.mancardi - 20130122 - 
+  var $from_email = '';  // TESI - francisco.mancardi - 20130122 - 
+                         // CRITIC SEE email_queue_row_to_object
+  var $in_cc = '';       // TESI - francisco.mancardi - 20130131- 
                          // CRITIC SEE email_queue_row_to_object
 
   var $metadata = array(
@@ -107,22 +109,27 @@ function email_queue_add( $p_email_data ) {
       $c_from_email = $xx;
     }
   }
+
+  $c_in_cc = trim($t_email_data->in_cc);
+
   $query = "INSERT INTO $t_email_table
             ( email,
               subject,
-            body,
-            submitted,
-            metadata,
-            from_email)
+              body,
+              submitted,
+              metadata,
+              from_email,
+              in_cc)
           VALUES
             ( " . db_param() . ",
               " . db_param() . ",
               " . db_param() . ",
-            " . db_param() . ",
-            " . db_param() . ",
-            " . db_param() . "
+              " . db_param() . ",
+              " . db_param() . ",
+              " . db_param() . ",
+              " . db_param() . "
           )";
-  db_query_bound( $query, Array( $c_email, $c_subject, $c_body, db_now(), $c_metadata,$c_from_email ) );
+  db_query_bound( $query, Array( $c_email, $c_subject, $c_body, db_now(), $c_metadata,$c_from_email,$c_in_cc ) );
   // CHANGES END 
   
   return db_insert_id( $t_email_table, 'email_id' );

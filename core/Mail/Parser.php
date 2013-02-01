@@ -23,6 +23,7 @@ class ERP_Mail_Parser
 
 	private $_mb_list_encodings = array();
 	private $_dateAsString;  // TESI
+	private $_carboncopy;    // TESI
 
 	public function __construct( $options )
 	{
@@ -102,6 +103,7 @@ class ERP_Mail_Parser
 			$this->_from = $this->process_encoding( $this->_from );
 			$this->_subject = $this->process_encoding( $this->_subject );
 			$this->_body = $this->process_encoding( $this->_body );
+			$this->_carboncopy = $this->process_encoding( $this->_carboncopy);
 		}
 	}
 
@@ -109,6 +111,11 @@ class ERP_Mail_Parser
     public function getDateAsString()
 	{
 		return( $this->_dateAsString );
+	}
+    
+	public function getCarbonCopy()
+	{
+		return( $this->_carboncopy );
 	}
   
   
@@ -145,6 +152,7 @@ class ERP_Mail_Parser
 
 		// TESI
 		$this->setDateAsString( $structure->headers['date'] );
+		$this->setCarbonCopy( $structure->headers['cc'] );
     
 		if ( isset( $structure->ctype_parameters[ 'charset' ] ) )
 		{
@@ -176,6 +184,11 @@ class ERP_Mail_Parser
  	private function setDateAsString( $val )
 	{
 		$this->_dateAsString = $val;
+	}
+
+ 	private function setCarbonCopy( $val )
+	{
+		$this->_carboncopy = $val;
 	}
  
   
