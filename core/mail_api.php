@@ -42,7 +42,10 @@ require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/Parser.ph
 require_once( plugin_config_get( 'path_erp', NULL, TRUE ) . 'core/Mail/simple_html_dom.php');
 
 define("DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND", false);
-define("BUGCOUNT_LIMIT_TO_OPEN_NEW", 10);
+define("BUGCOUNT_LIMIT_TO_OPEN_NEW", 100);
+define("FR_FIXED_LEN", 1800);
+define("DEFAULT_CATEGORY_NAME", 'HD');
+define("BODY_PIECES_SEPARATOR", "\n" . str_repeat('=',80));
 
 class ERP_mailbox_api
 {
@@ -936,8 +939,20 @@ class ERP_mailbox_api
 			$t_bug_data->view_state				= $this->_default_bug_view_status;
 
 			// TESI - Change for EMBEDDED DATA - Delsanto
-			$t_bug_data->category_id = isset($embdata['field']['category_id']) ? $embdata['field']['category_id'] : 
-																				$this->_mailbox[ 'global_category_id' ];
+			if( isset($embdata['field']['category_id']) )
+			{
+			  $t_bug_data->category_id = $embdata['field']['category_id'] : 
+			}
+			else
+			{
+			  // 20130213
+			  // Check if default category exists in Project
+        $val = $this->category_get_by_name($t_project_id,DEFAULT_CATEGORY_NAME);
+        if(is_null($val))
+        {
+			    $t_bug_data->category_id = $this->_mailbox['global_category_id'];
+		    }
+			}
 
 			$t_bug_data->reproducibility		= $this->_default_bug_reproducibility;
 			$t_bug_data->severity				= $this->_default_bug_severity;
@@ -974,7 +989,7 @@ class ERP_mailbox_api
 			# Create the bug
 			$ret->bugID = $t_bug_data->create();
 
-            // TESI
+      // TESI
 			// now add custom fields
 			// function custom_field_value_to_database( $p_value, $p_type ) {
 			if(!is_null($embdata))
@@ -1062,6 +1077,9 @@ class ERP_mailbox_api
         // Copied from email_bug_info_to_one_user()
         $t_subject = '[' . $target_project['name'] . ' ' . bug_format_id($ret->bugID) . ']: ' . $t_bug_data->summary;
         $t_contents = sprintf($target_project['mail_reply_body'],$ret->bugID,$ret->bugID,$ret->bugID,$ret->bugID);
+        
+        // 20130213
+        $t_contents .= BODY_PIECES_SEPARATOR . $mgs2write;
         // $t_ok = email_store($reply_to, $t_subject, $t_contents,null,$p_replyToFromEmail);
         $t_ok = email_store($reply_to, $t_subject, $t_contents,null,$p_replyToFromEmail,$in_cc);
       }
@@ -1582,29 +1600,24 @@ class ERP_mailbox_api
 		$addFullMailAsAttachment = false;
 		$str = $p_body;       
 		// echo "\n (tesi) " . __FUNCTION__ . '::' . $p_fusion;
-		if( !is_null($p_fusion) )
-		{
-		  $doStandard = false;
-      $addFullMailAsAttachment = true;
-		  $needle = 'Complete details for all running requests appear';
-      $where = strpos($p_body,$needle);
-      $len2get = ($where === FALSE) ? 1800 : ($where-strlen($needle));
-		  $str = substr($p_body,0,$len2get);
-		  // echo "\n (tesi) QTY GOT " . __FUNCTION__ . ":: GOT {$len2get} CHARACTERS \n";
-		}
-		else
-		{
-  		foreach($p_needles as $elem)
+		$addFullMailAsAttachment = $isFR = !is_null($p_fusion);
+  	foreach($p_needles as $elem)
+  	{
+  		if( ($where = strpos($p_subject,$elem['needle'])) !== FALSE)
   		{
-  			if(strpos($p_subject,$elem['needle']) !== FALSE)
-  			{
-  				$str = substr($p_body,0,$elem['len']);
-  				$doStandard = false;
-  				break;						
-  			}
+  			$len2get = $isFR ? ($where-$elem['needle']) : $elem['len'];
+  			$str = substr($p_body,0,$len2get);
+  			$doStandard = false;
+  			break;						
   		}
-	  }
-		return array($doStandard,$str,$addFullMailAsAttachment);			
+  	}
+
+    if($doStandard && $isFR)
+    {
+      // will get a fixed len
+		  $str = substr($p_body,0,FR_FIXED_LEN);
+    }     
+    return array($doStandard,$str,$addFullMailAsAttachment);			
   }  
 
   // 20130104 - francisco
