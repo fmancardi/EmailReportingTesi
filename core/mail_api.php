@@ -8,6 +8,29 @@
 # 
 # This page receives an E-Mail via POP3 or IMAP and generates an Report
 #
+# 20130214 - fman - 
+#                   1. new logic to assign category
+#                   Step 1 - look for category provided inside the mail body, using the
+#                            special keywords defined by Tesi.
+#                            mantis_begin
+#                            categoria=CATEGORY NAME,  IMPORTANT ',' is mandatory
+#                            assignto=user email,
+#                            mantis_end
+#  
+#                   Step 2 - If Step 1 fails:
+#                            look for category with name defined in DEFAULT_CATEGORY_NAME
+#                            inside the project where we are trying to create the issue.
+#                   Step 3 - if Step 2 fails, then use category defined in plugin configuration
+#                  
+#                   2. Possibility to assign issue on creation using special keyword (assignto)
+#                      mantis_begin
+#                      categoria=CATEGORY NAME,  IMPORTANT ',' is mandatory
+#                      assignto=user email,
+#                      mantis_end
+#
+#                   3. On mail created automatically to comunicate user. issue creation the TEXT part
+#                      of original body is added AFTER the standard Tesi message.
+#
 # 20130121 - fman - improvements on email reply
 # 20130118 - fman - fixes issue after test
 # 20130117 - fman - improvement in architecture and configuration
@@ -45,7 +68,7 @@ define("DONT_TRIGGER_ERROR_ON_BUG_NOT_FOUND", false);
 define("BUGCOUNT_LIMIT_TO_OPEN_NEW", 100);
 define("FR_FIXED_LEN", 1800);
 define("DEFAULT_CATEGORY_NAME", 'HD');
-define("BODY_PIECES_SEPARATOR", "\n" . str_repeat('=',80));
+define("BODY_PIECES_SEPARATOR", "\n" . str_repeat('=',80) . "\n\n");
 
 class ERP_mailbox_api
 {
@@ -938,21 +961,37 @@ class ERP_mailbox_api
 			$t_bug_data->handler_id				= 0;
 			$t_bug_data->view_state				= $this->_default_bug_view_status;
 
-			// TESI - Change for EMBEDDED DATA - Delsanto
-			if( isset($embdata['field']['category_id']) )
+			$t_bug_data->handler_id	= 0;
+      $gofor = 'handler_mail';
+			if( isset($embdata['field'][$gofor]) )
 			{
-			  $t_bug_data->category_id = $embdata['field']['category_id'] : 
+			  $t_bug_data->handler_id = user_get_id_by_email($embdata['field'][$gofor]); 
 			}
-			else
+
+
+			// TESI - Change for EMBEDDED DATA - Delsanto
+			$t_bug_data->category_id = 0;
+      $gofor = 'category_id';
+			if( isset($embdata['field'][$gofor]) )
 			{
+			  $t_bug_data->category_id = $embdata['field'][$gofor];
+			}
+
+      if($t_bug_data->category_id <= 0)
+      {
 			  // 20130213
 			  // Check if default category exists in Project
-        $val = $this->category_get_by_name($t_project_id,DEFAULT_CATEGORY_NAME);
-        if(is_null($val))
-        {
-			    $t_bug_data->category_id = $this->_mailbox['global_category_id'];
-		    }
+			  $t_bug_data->category_id = $this->category_get_by_name($t_project_id,DEFAULT_CATEGORY_NAME);
 			}
+
+      $t_bug_data->category_id = intval($t_bug_data->category_id);
+      if($t_bug_data->category_id <= 0)
+      {
+			  $t_bug_data->category_id = intval($this->_mailbox['global_category_id']);
+		  }
+
+
+
 
 			$t_bug_data->reproducibility		= $this->_default_bug_reproducibility;
 			$t_bug_data->severity				= $this->_default_bug_severity;
@@ -1760,11 +1799,11 @@ class ERP_mailbox_api
   	{
   		// Configuration
   		$cfSet = array_flip(array('priorita_cliente','est.work','data_richiesta_rilascio','risorsa_prepianif'));
-		$fieldSet = array('categoria' => 'category_id');
+		$fieldSet = array('categoria' => 'category_id', 'assignto' => 'handler_mail');
 
   		// get area
-        $start = $limits['mantis_begin']+strlen($tags['mantis_begin']);
-        $size = $limits['mantis_end']-$start;
+            $start = $limits['mantis_begin']+strlen($tags['mantis_begin']);
+            $size = $limits['mantis_end']-$start;
   		$cfg = substr(strtolower($p_email['X-Mantis-Body']),$start,$size);
 
 		// From stackoverflow
@@ -1783,7 +1822,7 @@ class ERP_mailbox_api
         	}
         	else
         	{
-				$this->categoryCache['by Mail'] = $val['id'];			
+				$this->categoryCache['by Mail'] = $val;			
         	}
 		}
 
@@ -1811,7 +1850,8 @@ class ERP_mailbox_api
         	if( isset($fieldSet[$xx[0]]) )
         	{
         		// echo 'IN FIELD>>';  echo $xx[0];
-        		switch($xx[0])
+        		$what2search = strtolower($xx[0]);
+        		switch($what2search)
         		{
         			case 'categoria':
 						if(!isset($this->categoryCache[$xx[1]]))
@@ -1855,7 +1895,6 @@ class ERP_mailbox_api
   	
 	function category_get_by_name($p_project_id,$p_name) 
 	{
-		$c_category_id = db_prepare_int( $p_category_id );
 		$t_category_table = db_get_table( 'mantis_category_table' );
 		$t_project_table = db_get_table( 'mantis_project_table' );
 	
@@ -1872,7 +1911,7 @@ class ERP_mailbox_api
 		$row = db_fetch_array( $result );
 		var_dump($row);
 		// echo 'DIE: on' . __FUNCTION__;
-		return $row;
+		return $row['id'];
 	}
   
 }  // class end
