@@ -17,7 +17,7 @@
 # 20130122 - francisco.mancardi - changes to allow different FROM MAIL when sending mail
 #            EmailData added new property from_email
 #            email_queue_add() - logic to get and use from_email
-#
+#            CHANGES DONE TO file distributed with 1.2.14
 #
 
 
@@ -25,32 +25,33 @@
  * @package CoreAPI
  * @subpackage EmailQueueAPI
  * @copyright Copyright (C) 2000 - 2002  Kenzaburo Ito - kenito@300baud.org
- * @copyright Copyright (C) 2002 - 2012  MantisBT Team - mantisbt-dev@lists.sourceforge.net
+ * @copyright Copyright (C) 2002 - 2013  MantisBT Team - mantisbt-dev@lists.sourceforge.net
  * @link http://www.mantisbt.org
  */
- 
+
  /**
  * EmailData Structure Definition
  * @package MantisBT
  * @subpackage classes
  */
 class EmailData {
-  // properties set during creation
-  var $email = '';
-  var $subject = '';
-  var $body = '';
-  var $from_email = '';  // TESI - francisco.mancardi - 20130122 - 
-                         // CRITIC SEE email_queue_row_to_object
-  var $in_cc = '';       // TESI - francisco.mancardi - 20130131- 
-                         // CRITIC SEE email_queue_row_to_object
+	// properties set during creation
+	var $email = '';
+	var $subject = '';
+	var $body = '';
+	var $metadata = array(
+		'headers' => array(),
+	);
 
-  var $metadata = array(
-    'headers' => array(),
-  );
+	// auto-populated properties
+	var $email_id = 0;
+	var $submitted = '';
 
-  // auto-populated properties
-  var $email_id = 0;
-  var $submitted = '';
+    var $from_email = '';  // TESI - francisco.mancardi - 20130122 - 
+                           // CRITIC SEE email_queue_row_to_object
+    var $in_cc = '';       // TESI - francisco.mancardi - 20130131- 
+                           // CRITIC SEE email_queue_row_to_object
+
 };
 
 /**
@@ -59,9 +60,9 @@ class EmailData {
  * @return EmailData
  */
 function email_queue_prepare_db( $p_email_data ) {
-  $p_email_data->email_id = db_prepare_int( $p_email_data->email_id );
+	$p_email_data->email_id = db_prepare_int( $p_email_data->email_id );
 
-  return $p_email_data;
+	return $p_email_data;
 }
 
 /**
@@ -70,33 +71,32 @@ function email_queue_prepare_db( $p_email_data ) {
  * @return int
  */
 function email_queue_add( $p_email_data ) {
-  $t_email_data = email_queue_prepare_db( $p_email_data );
+	$t_email_data = email_queue_prepare_db( $p_email_data );
 
-        // var_dump($t_email_data);
-  # email cannot be blank
-  if( is_blank( $t_email_data->email ) ) {
-    error_parameters( lang_get( 'email' ) );
-    trigger_error( ERROR_EMPTY_FIELD, ERROR );
-  }
+	# email cannot be blank
+	if( is_blank( $t_email_data->email ) ) {
+		error_parameters( lang_get( 'email' ) );
+		trigger_error( ERROR_EMPTY_FIELD, ERROR );
+	}
 
-  # subject cannot be blank
-  if( is_blank( $t_email_data->subject ) ) {
-    error_parameters( lang_get( 'subject' ) );
-    trigger_error( ERROR_EMPTY_FIELD, ERROR );
-  }
+	# subject cannot be blank
+	if( is_blank( $t_email_data->subject ) ) {
+		error_parameters( lang_get( 'subject' ) );
+		trigger_error( ERROR_EMPTY_FIELD, ERROR );
+	}
 
-  # body cannot be blank
-  if( is_blank( $t_email_data->body ) ) {
-    error_parameters( lang_get( 'body' ) );
-    trigger_error( ERROR_EMPTY_FIELD, ERROR );
-  }
+	# body cannot be blank
+	if( is_blank( $t_email_data->body ) ) {
+		error_parameters( lang_get( 'body' ) );
+		trigger_error( ERROR_EMPTY_FIELD, ERROR );
+	}
 
-  $t_email_table = db_get_table( 'mantis_email_table' );
+	$t_email_table = db_get_table( 'mantis_email_table' );
 
-  $c_email = $t_email_data->email;
-  $c_subject = $t_email_data->subject;
-  $c_body = $t_email_data->body;
-  $c_metadata = serialize( $t_email_data->metadata );
+	$c_email = $t_email_data->email;
+	$c_subject = $t_email_data->subject;
+	$c_body = $t_email_data->body;
+	$c_metadata = serialize( $t_email_data->metadata );
 
   // CHANGES START
   // francisco.mancardi - 20130122
@@ -141,30 +141,30 @@ function email_queue_add( $p_email_data ) {
  * @return bool|EmailData
  */
 function email_queue_row_to_object( $p_row ) {
-  # typically this function takes as an input the result of db_fetch_array() which can be false.
-  if( $p_row === false ) {
-    return false;
-  }
+	# typically this function takes as an input the result of db_fetch_array() which can be false.
+	if( $p_row === false ) {
+		return false;
+	}
 
-  $t_row = $p_row;
-  $t_row['metadata'] = unserialize( $t_row['metadata'] );
+	$t_row = $p_row;
+	$t_row['metadata'] = unserialize( $t_row['metadata'] );
 
-  $t_email_data = new EmailData;
+	$t_email_data = new EmailData;
 
-  $t_row_keys = array_keys( $t_row );
-  $t_vars = get_object_vars( $t_email_data );
+	$t_row_keys = array_keys( $t_row );
+	$t_vars = get_object_vars( $t_email_data );
 
-  # Check each variable in the class
-  foreach( $t_vars as $t_var => $t_value ) {
-    # If we got a field from the DB with the same name
-    if( in_array( $t_var, $t_row_keys, true ) ) {
+	# Check each variable in the class
+	foreach( $t_vars as $t_var => $t_value ) {
+		# If we got a field from the DB with the same name
+		if( in_array( $t_var, $t_row_keys, true ) ) {
 
-      # Store that value in the object
-      $t_email_data->$t_var = $t_row[$t_var];
-    }
-  }
+			# Store that value in the object
+			$t_email_data->$t_var = $t_row[$t_var];
+		}
+	}
 
-  return $t_email_data;
+	return $t_email_data;
 }
 
 /**
@@ -173,15 +173,15 @@ function email_queue_row_to_object( $p_row ) {
  * @return bool|EmailData
  */
 function email_queue_get( $p_email_id ) {
-  $c_email_id = db_prepare_int( $p_email_id );
-  $t_email_table = db_get_table( 'mantis_email_table' );
+	$c_email_id = db_prepare_int( $p_email_id );
+	$t_email_table = db_get_table( 'mantis_email_table' );
 
-  $query = 'SELECT * FROM ' . $t_email_table . ' WHERE email_id=' . db_param();
-  $result = db_query_bound( $query, Array( $c_email_id ) );
+	$query = 'SELECT * FROM ' . $t_email_table . ' WHERE email_id=' . db_param();
+	$result = db_query_bound( $query, Array( $c_email_id ) );
 
-  $t_row = db_fetch_array( $result );
+	$t_row = db_fetch_array( $result );
 
-  return email_queue_row_to_object( $t_row );
+	return email_queue_row_to_object( $t_row );
 }
 
 /**
@@ -190,27 +190,30 @@ function email_queue_get( $p_email_id ) {
  * @return null
  */
 function email_queue_delete( $p_email_id ) {
-  $c_email_id = db_prepare_int( $p_email_id );
-  $t_email_table = db_get_table( 'mantis_email_table' );
+	$c_email_id = db_prepare_int( $p_email_id );
+	$t_email_table = db_get_table( 'mantis_email_table' );
 
-  $query = 'DELETE FROM ' . $t_email_table . ' WHERE email_id=' . db_param();
-  db_query_bound( $query, Array( $c_email_id ) );
+	$query = 'DELETE FROM ' . $t_email_table . ' WHERE email_id=' . db_param();
+	db_query_bound( $query, Array( $c_email_id ) );
+
+	log_event( LOG_EMAIL, "message #$p_email_id deleted from queue" );
 }
 
 /**
  * Get array of email queue id's
+ * @param string $p_sort_order 'ASC' or 'DESC' (defaults to DESC)
  * @return array
  */
-function email_queue_get_ids() {
-  $t_email_table = db_get_table( 'mantis_email_table' );
+function email_queue_get_ids( $p_sort_order = 'DESC' ) {
+	$t_email_table = db_get_table( 'mantis_email_table' );
 
-  $query = 'SELECT email_id FROM ' . $t_email_table . ' ORDER BY email_id DESC';
-  $result = db_query_bound( $query );
+	$query = "SELECT email_id FROM $t_email_table ORDER BY email_id $p_sort_order";
+	$result = db_query_bound( $query );
 
-  $t_ids = array();
-  while(( $t_row = db_fetch_array( $result ) ) !== false ) {
-    $t_ids[] = $t_row['email_id'];
-  }
+	$t_ids = array();
+	while(( $t_row = db_fetch_array( $result ) ) !== false ) {
+		$t_ids[] = $t_row['email_id'];
+	}
 
-  return $t_ids;
+	return $t_ids;
 }
