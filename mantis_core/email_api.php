@@ -804,7 +804,7 @@ function email_bug_deleted( $p_bug_id ) {
  * @param string $p_in_cc         // TESI 
  * @return int
  */
-function email_store( $p_recipient, $p_subject, $p_message, $p_headers = null ) {
+function email_store( $p_recipient, $p_subject, $p_message, $p_headers = null,$p_from_email = null,$p_in_cc = null  ) {
 	$t_recipient = trim( $p_recipient );
 	$t_subject = string_email( trim( $p_subject ) );
 	$t_message = string_email_links( trim( $p_message ) );
