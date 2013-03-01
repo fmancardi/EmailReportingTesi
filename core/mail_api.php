@@ -1091,17 +1091,26 @@ class ERP_mailbox_api
           $reply_to = $target_project['mail_reply_to'];
         } 
 
-        if( isset($target_project['mail_reply_to_cc']) && strlen(trim($target_project['mail_reply_to_cc'])) > 0)
-        {
-          $reply_to .= "," . $target_project['mail_reply_to_cc'];
-        } 
+        //if( isset($target_project['mail_reply_to_cc']) && strlen(trim($target_project['mail_reply_to_cc'])) > 0)
+        //{
+        //  $reply_to .= "," . $target_project['mail_reply_to_cc'];
+        //} 
         echo "\n (tesi) REPLY TO BEFORE EMAIL STORE:" . $reply_to;
 
         $in_cc = '';
         if( isset($target_project['use_received_cc']) &&  $target_project['use_received_cc'])  
         {
-          $in_cc =  $original_cc;
+          $in_cc = $original_cc;
         }
+
+        if( isset($target_project['mail_reply_to_cc']) && strlen(trim($target_project['mail_reply_to_cc'])) > 0)
+        {
+          if($in_cc != '')
+          {
+            $in_cc .= ",";
+          } 
+          $in_cc .= $target_project['mail_reply_to_cc'];
+        } 
 
         $add2sub = $t_bug_data->summary;
         echo "\n (tesi) STR 2 REMOVE:" . $str2remove;
@@ -1113,7 +1122,7 @@ class ERP_mailbox_api
 
 
         // build new subject 
-        $t_subject = '[TICKET ' . bug_format_id($ret->bugID) . ']: ' . $add2sub;
+        $t_subject = '[TICKET ' . bug_format_id($ret->bugID) . '] ' . $add2sub;
 
         $t_contents = sprintf($target_project['mail_reply_body'],$ret->bugID,$ret->bugID,$ret->bugID,$ret->bugID);
         
