@@ -1113,8 +1113,8 @@ class ERP_mailbox_api
 
 
         // build new subject 
-        // Copied from email_bug_info_to_one_user()
-        $t_subject = '[' . $target_project['name'] . ' ' . bug_format_id($ret->bugID) . ']: ' . $t_bug_data->summary;
+        $t_subject = '[TICKET ' . bug_format_id($ret->bugID) . ']: ' . $add2sub;
+
         $t_contents = sprintf($target_project['mail_reply_body'],$ret->bugID,$ret->bugID,$ret->bugID,$ret->bugID);
         
         // 20130213
